@@ -1,0 +1,64 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects
+*.so
+*.so.*
+
+# Temporary directories
+build
+cmake-build-debug
+Testing
+reports
+
+# Documentation
+docs/html
+
+# VS Code
+.vscode/c_cpp_properties.json
+
+# Clang
+.clangd
+test

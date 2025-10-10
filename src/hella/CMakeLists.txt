@@ -1,0 +1,68 @@
+set(public_headers
+)
+
+set(private_headers
+  alloc.h
+  convolution.h
+  dada.h
+  dedisperse.h
+  definitions.h
+  flagger.h
+  macros.h
+  median_filter.h
+  normalization.h
+  peaks.h
+  sigproc.h
+  smooth.h
+  timeseries.h
+  transpose.h
+  unused.h
+)
+
+set(
+  sources
+  src/convolution.cu
+  src/dada.cpp
+  src/dedisperse.cpp
+  src/flagger.cu
+  src/median_filter.cpp
+  src/normalization.cu
+  src/peaks.cu
+  src/sigproc.cpp
+  src/smooth.cpp
+  src/timeseries.cu
+  src/transpose.cu
+  src/unused.cu
+)
+
+add_library(
+  hella-core
+  OBJECT
+   ${sources}
+   ${public_headers}
+   ${private_headers}
+)
+
+target_include_directories(
+  hella-core
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/src>
+    $<INSTALL_INTERFACE:include>
+    ${DEDISP_INCLUDE_DIR}
+    ${PSRDADA_INCLUDEDIR}
+)
+
+target_link_libraries(
+  hella-core
+  PUBLIC
+    ${PSRDADA_LDFLAGS}
+    ${DEDISP_LIBRARIES}
+    CUDA::cudart
+    CUDA::nppial
+    CUDA::nppif
+    CUDA::npps
+    CUDA::nppisu
+    CUDA::nppc
+    CUDA::cublas
+)
