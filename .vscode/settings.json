@@ -76,6 +76,7 @@
         "nullptr",
         "nvcc",
         "ostringstream",
+        "OUTPUTPATH",
         "pinfo",
         "psum",
         "qdata",

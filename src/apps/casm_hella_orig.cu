@@ -1,8 +1,8 @@
 // -*- c++ -*-
 
-#include <sys/cdefs.h>
 #include <time.h>
 #include <string.h>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <math.h>
@@ -52,7 +52,6 @@
 #include <cuda.h>
 #include "cuda_fp16.h"
 #include <cublas_v2.h>
-#include <spdlog/spdlog.h>
 
 //using namespace std;
 
@@ -77,6 +76,8 @@ const int MAXRECV = 500;
 // CASM frequency and timing parameters
 // #define FREQ_CHANNEL_WIDTH 0.03075  // 0.03075 MHz
 // #define CENTER_FREQ 450.0e6         // 450 MHz in Hz
+// #define TIME_RESOLUTION 1.0e-3      // 1 ms in seconds
+
 #define FREQ_CHANNEL_WIDTH -0.030518
 #define CENTER_FREQ 500.0e6         // 450 MHz in Hz
 #define TIME_RESOLUTION 1.0e-3      // 1 ms in seconds
@@ -130,13 +131,13 @@ void dsaX_dbgpu_cleanup (dada_hdu_t * in, dada_hdu_t * out)
 {
   if (dada_hdu_unlock_read (in) < 0)
   {
-    spdlog::error("could not unlock read on hdu_in");
+    syslog(LOG_ERR, "could not unlock read on hdu_in");
   }
   dada_hdu_destroy (in);
 
   if (dada_hdu_unlock_write (out) < 0)
   {
-    spdlog::error("could not unlock write on hdu_out");
+    syslog(LOG_ERR, "could not unlock write on hdu_out");
   }
   dada_hdu_destroy (out);
 }
@@ -202,30 +203,7 @@ typedef struct pinfo {
   half * batch{nullptr}, * mask{nullptr}, * d_smooth{nullptr};
   float * d_ts{nullptr};
   int batch_stride;
-
-  float * d_bp{nullptr};      // bandpass
-  float * h_bp{nullptr};      // bandpass on host
-  float * h_mbp{nullptr};     // bandpass on host, median filtered
-  float * d_bpout{nullptr};   // bandpass normalized
-
-  size_t smooth_kernel_size{0}; // maximum size of the smoothing kernel in bytes
-  float * d_kernel{nullptr};    // smoothing kernel device memory
-  float * h_kernel{nullptr};    // smoothing kernel host memory
-
-  size_t d_scratch_size{0};    // size of the device scratch space
-  void * d_scratch{nullptr};   // device memory scratch space
-
-  size_t h_scratch_size{0};    // size of the host scratch space
-  void * h_scratch{nullptr};   // pinned host memory scratch space
-
-  size_t sums_size{0};
-  float* d_sums{nullptr};
-  float* d_qsums{nullptr};
-  float* h_sums{nullptr};
-  float* h_qsums{nullptr};
-
-  size_t mask_size{0};        // size of mask memory in bytes
-  void * d_mask{nullptr};     // mask device memory
+  float * d_bpout{nullptr};
 
   // boxcars
   Npp32f * boxes{nullptr};
@@ -253,7 +231,7 @@ typedef struct pinfo {
 
 } pinfo;
 
-//! get the GPU id from the configuration file, identified by the GPU keyword
+//! get the GPU id from the configuration file, idenitifed by the GPU keyword
 int get_gpu_id(FILE *fconf) {
 
   char * line = NULL;
@@ -299,13 +277,13 @@ void initialize(FILE *fconf, pinfo * p) {
       if (strcmp(c2,"FILE")==0) p->inp_format=1;
       if (strcmp(c2,"FILTERBANK")==0) p->inp_format=2;
       if (strcmp(c2,"CANDIDATE")==0) p->inp_format=3;
-      spdlog::info("Using input format {}",p->inp_format);
+      printf("Using input format %d\n",p->inp_format);
     }
     if (strcmp(c1,"OUTPUT")==0) {
       if (strcmp(c2,"FILE")==0) p->out_format=0;
       if (strcmp(c2,"SOCKET")==0) p->out_format=1;
       if (strcmp(c2,"BOTH")==0) p->out_format=2;
-      spdlog::info("Using output format {}",p->out_format);
+      printf("Using output format %d\n",p->out_format);
     }
     if (strcmp(c1,"HOST")==0) {
       p->coincidencer_host = c2;
@@ -332,12 +310,12 @@ void initialize(FILE *fconf, pinfo * p) {
 
     if (strcmp(c1,"INPUT_PATH")==0) {
       strcpy(p->inp_path,c2);
-      spdlog::info("Input path: {}",p->inp_path);
+      printf("Input path: %s\n",p->inp_path);
     }
 
     if (strcmp(c1,"DADA_OUT")==0) {
       strcpy(p->dada_out,c2);
-      spdlog::info("DADA out: {}",p->dada_out);
+      printf("DADA out: %s\n",p->dada_out);
     }
 
     if (strcmp(c1,"DM_MIN")==0)
@@ -374,7 +352,7 @@ void initialize(FILE *fconf, pinfo * p) {
       for (int i=0;i<p->nscrunches;i++) {
         read = getline(&line, &len, fconf);
         sscanf(line,"%d %d %f %d",&(p->scrunches[i].tscrunch),&(p->scrunches[i].fscrunch),&(p->scrunches[i].thresh),&(p->scrunches[i].nits));
-        spdlog::info("Have a scrunch with {} {} {} {}",p->scrunches[i].tscrunch,p->scrunches[i].fscrunch,p->scrunches[i].thresh,p->scrunches[i].nits);
+        printf("Have a scrunch with %d %d %g %d\n",p->scrunches[i].tscrunch,p->scrunches[i].fscrunch,p->scrunches[i].thresh,p->scrunches[i].nits);
       }
 
     }
@@ -390,15 +368,14 @@ void initialize(FILE *fconf, pinfo * p) {
     j += 1;
   }
   p->nboxcar=j;
-  spdlog::info("Search parameters: DM range {} to {}, WIDTHS {} to {} ({} trials), SNR {}",p->minDM,p->maxDM,p->minWidth,p->maxWidth,p->nboxcar,p->snr);
+  printf("Search parameters: DM range %g to %g, WIDTHS %d to %d (%d trials), SNR %g\n",p->minDM,p->maxDM,p->minWidth,p->maxWidth,p->nboxcar,p->snr);
   if (p->out_format != 0)
-    spdlog::info("Outputting to socket {}:{}",p->coincidencer_host.c_str(),p->coincidencer_port);
+    printf("Outputting to socket %s:%d\n",p->coincidencer_host.c_str(),p->coincidencer_port);
   if (p->out_format != 1)
-    spdlog::info("Outputting to text file {}",p->out_path);
+    printf("Outputting to text file %s\n",p->out_path);
 
 
   // set up DM plan
-  spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   // generate DM list
   dedisp_generate_dm_list(p->dedispersion_plan,p->minDM,p->maxDM,40,TOL);
@@ -429,7 +406,6 @@ void initialize(FILE *fconf, pinfo * p) {
   //p->h_dedisp = (float *)malloc(sizeof(float)*p->ndms*p->ntime_dd);
   //p->indata = (unsigned char *)malloc(sizeof(unsigned char)*NCHAN*p->NTIME);
   p->h_dataF = (float *)malloc(sizeof(float)*NCHAN*p->NTIME);
-  spdlog::info("allocating {} bytes ndms={} ntime_dedisp={}", sizeof(float)*p->ndms*p->ntime_dedisp, p->ndms, p->ntime_dedisp);
   checkCuda(cudaMalloc((void **)(&p->d_dedispPacked), sizeof(float)*p->ndms*p->ntime_dedisp));
   checkCuda(cudaMalloc((void **)(&p->d_inputPacked), sizeof(unsigned char)*NCHAN*p->NTIME));
   checkCuda(cudaMalloc((void **)(&p->d_data), sizeof(unsigned char)*NBEAMS*NCHAN*p->NTIME));
@@ -445,12 +421,10 @@ void initialize(FILE *fconf, pinfo * p) {
   }
 
   checkCuda(cudaMalloc((void **)(&p->d_ts), sizeof(float) * NBATCH * p->NTIME));
-  checkCuda(cudaMalloc((&p->d_bp), sizeof(float) * NBATCH * NCHAN));
-  checkCuda(cudaMallocHost((&p->h_bp), sizeof(float) * NBATCH * NCHAN));
-  checkCuda(cudaMallocHost((&p->h_mbp), sizeof(float) * NBATCH * NCHAN));
   checkCuda(cudaMalloc((&p->d_bpout), sizeof(float) * NBATCH * NCHAN));
 
-  spdlog::info("Will use {} DM trials, output {} times, process {} times with stride {}",p->ndms,p->ntime_dd,p->NTIME,p->batch_stride);
+  printf("Will use %d DM trials, output %d times, process %d times with stride %d\n",p->ndms,p->ntime_dd,p->NTIME,p->batch_stride);
+
 
   // boxcars
   p->boxes = nppiMalloc_32f_C1(p->ntime_out,(p->ndms-2)*p->nboxcar,&(p->boxes_step));
@@ -464,11 +438,6 @@ void initialize(FILE *fconf, pinfo * p) {
   p->stds[4] = BOXCAR_STD_4;
   p->stds[5] = BOXCAR_STD_5;
   p->stds[6] = BOXCAR_STD_6;
-  if (p->nboxcar > 7)
-  {
-    spdlog::error("only 7 boxcar widths are supported");
-    exit(EXIT_FAILURE);
-  }
 
   // peak finding
   p->dmt.resize((p->ndms-2)*p->ntime_out);
@@ -507,19 +476,12 @@ void initialize(FILE *fconf, pinfo * p) {
 // deallocate everything
 void deallocator(pinfo * p) {
 
-  spdlog::debug("deallocating pinfo struct");
+  printf("deallocating pinfo struct\n");
   if (p->data)
     free(p->data);
   p->data = nullptr;
   if (p->h_dataF)
     free(p->h_dataF);
-  checkCuda(cudaFree(p->d_bp)); p->d_bp = nullptr;
-  checkCuda(cudaFreeHost(p->h_bp)); p->h_bp = nullptr;
-  checkCuda(cudaFreeHost(p->h_mbp)); p->h_mbp = nullptr;
-  checkCuda(cudaFree(p->d_sums)); p->d_sums = nullptr;
-  checkCuda(cudaFree(p->d_qsums)); p->d_qsums = nullptr;
-  checkCuda(cudaFreeHost(p->h_sums)); p->h_sums = nullptr;
-  checkCuda(cudaFreeHost(p->h_qsums)); p->h_qsums = nullptr;
   checkCuda(cudaFree(p->d_bpout));
   checkCuda(cudaFree(p->d_data));
   checkCuda(cudaFree(p->batch));
@@ -552,33 +514,33 @@ void deallocator(pinfo * p) {
 
 void help() {
 
-  spdlog::info("Usage: pipeline -c <config file>");
-  spdlog::info("Everything is in the config file. Specific parameters include: ");
-  spdlog::info("INPUT <DADA or FILE or FILTERBANK>");
-  spdlog::info("INPUT_PATH <dada buffer or full path to filterbank file>");
-  spdlog::info("DADA_OUT <dada buffer>");
-  spdlog::info("BEAM_OFFSET <offset in number of beams in input dada buffer>");
-  spdlog::info("DM_MIN <min DM of search>");
-  spdlog::info("DM_MAX <max DM of search>");
-  spdlog::info("WIDTH_MIN <min width of search>");
-  spdlog::info("WIDTH_MAX <max width of search>");
-  spdlog::info("SNR <SNR threshold for search>");
-  spdlog::info("GULP <base gulp size>");
-  spdlog::info("BEAMFLAGS <full path to beam flags output>");
-  spdlog::info("SPECFLAGS <full path to spec flags output>");
-  spdlog::info("OUTPUT <FILE or SOCKET of BOTH>");
-  spdlog::info("OUTPUTPATH <path to output file>");
-  spdlog::info("HOST <ip of T2 host>");
-  spdlog::info("PORT <T2 port>");
-  spdlog::info("GPU <GPU ID 0 or 1>");
-  spdlog::info("BEAM0 <first beam in output>");
-  spdlog::info("OUTPUT_BANDPASS <0 or 1 or 2>");
-  spdlog::info("SPEC_MAX <max thresh in spec flagging>");
-  spdlog::info("SPEC_MAX <max thresh in spec flagging>");
+  printf("Usage: pipeline -c <config file>\n");
+  printf("Everything is in the config file. Specific parameters include: \n");
+  printf("INPUT <DADA or FILE or FILTERBANK>\n");
+  printf("INPUT_PATH <dada buffer or full path to filterbank file>\n");
+  printf("DADA_OUT <dada buffer>\n");
+  printf("BEAM_OFFSET <offset in number of beams in input dada buffer>\n");
+  printf("DM_MIN <min DM of search>\n");
+  printf("DM_MAX <max DM of search>\n");
+  printf("WIDTH_MIN <min width of search>\n");
+  printf("WIDTH_MAX <max width of search>\n");
+  printf("SNR <SNR threshold for search>\n");
+  printf("GULP <base gulp size>\n");
+  printf("BEAMFLAGS <full path to beam flags output>\n");
+  printf("SPECFLAGS <full path to spec flags output>\n");
+  printf("OUTPUT <FILE or SOCKET of BOTH>\n");
+  printf("OUTPUTPATH <path to output file>\n");
+  printf("HOST <ip of T2 host>\n");
+  printf("PORT <T2 port>\n");
+  printf("GPU <GPU ID 0 or 1>\n");
+  printf("BEAM0 <first beam in output>\n");
+  printf("OUTPUT_BANDPASS <0 or 1 or 2>\n");
+  printf("SPEC_MAX <max thresh in spec flagging>\n");
+  printf("SPEC_MAX <max thresh in spec flagging>\n");
 
-  spdlog::info("SCRUNCH <number of scrunches>");
-  spdlog::info("<time scrunch> <frequency scrunch> <flagging threshold> <number of iterations>");
-  spdlog::info("repeat the above as many times as you like for different parameters");
+  printf("SCRUNCH <number of scrunches>\n");
+  printf("<time scrunch> <frequency scrunch> <flagging threshold> <number of iterations>\n");
+  printf("repeat the above as many times as you like for different parameters\n");
 
 }
 
@@ -596,9 +558,9 @@ __device__ void warpReduce(volatile float *sdata, unsigned int tid) {
 }
 
 // kernel to sum array and its squares
-__global__ void sumArray(half * data, float * sums, float * qsums, int width, int height, int stride)
-{
-  __shared__ float sdata[512], qdata[512];
+__global__ void sumArray(half * data, float * sums, float * qsums, int width, int height, int stride) {
+
+  extern __shared__ float sdata[512], qdata[512];
   unsigned int tid = threadIdx.x;
   unsigned int i = blockIdx.x*512 + tid;
   int x = i % width;
@@ -654,36 +616,26 @@ __global__ void sumArrayFloat(float * data, float * sums, float * qsums, int wid
 
 
 // Host function to orchestrate the normalization process
-// width = p->NTIME
-// height = NBATCH * NCHAN
-// stride = p->batch_stride
-float calculateStdDev(pinfo *p, half * d_data, int width, int height, int stride)
-{
+float calculateStdDev(half * d_data, int width, int height, int stride) {
+
+  float *d_sums, *d_qsums;
   int new_width = (int)(512*floor(width/512.));
   int nblocks = new_width*height / 512;
-  size_t required_sums_size = sizeof(float) * nblocks;
-  if (required_sums_size > p->sums_size)
-  {
-    checkCuda(cudaFree(p->d_sums));
-    checkCuda(cudaFree(p->d_qsums));
-    checkCuda(cudaFreeHost(p->h_sums));
-    checkCuda(cudaFreeHost(p->h_qsums));
-    checkCuda(cudaMalloc(&(p->d_sums), required_sums_size));
-    checkCuda(cudaMalloc(&(p->d_qsums), required_sums_size));
-    checkCuda(cudaMallocHost(&(p->h_sums), required_sums_size));
-    checkCuda(cudaMallocHost(&(p->h_qsums), required_sums_size));
-    p->sums_size = required_sums_size;
-  }
 
-  sumArray<<<nblocks,512>>>(d_data, p->d_sums,p->d_qsums,new_width,height,stride);
+  checkCuda(cudaMalloc(&d_sums, nblocks * sizeof(float)));
+  checkCuda(cudaMalloc(&d_qsums, nblocks * sizeof(float)));
+  sumArray<<<nblocks,512>>>(d_data,d_sums,d_qsums,new_width,height,stride);
 
-  checkCuda(cudaMemcpy(p->h_sums,p->d_sums,required_sums_size,cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(p->h_qsums,p->d_qsums,required_sums_size,cudaMemcpyDeviceToHost));
+  float *sums, *qsums;
+  sums = (float *)malloc(sizeof(float)*nblocks);
+  qsums = (float *)malloc(sizeof(float)*nblocks);
+  checkCuda(cudaMemcpy(sums,d_sums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
+  checkCuda(cudaMemcpy(qsums,d_qsums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
 
   float sum=0., qsum=0.;
   for (int i=0;i<nblocks;i++) {
-    sum += p->h_sums[i];
-    qsum += p->h_qsums[i];
+    sum += sums[i];
+    qsum += qsums[i];
   }
   float mn = sum/(new_width*height*1.);
 
@@ -691,39 +643,37 @@ float calculateStdDev(pinfo *p, half * d_data, int width, int height, int stride
   stdDev /= 1.*new_width*height;
   stdDev = sqrt(stdDev);
 
+  checkCuda(cudaFree(d_sums));
+  checkCuda(cudaFree(d_qsums));
+  free(sums);
+  free(qsums);
+
   return stdDev;
+
+
+
 }
-
-
 // Host function to orchestrate the normalization process
-float calculateStdDevFloat(pinfo* p, float * d_data, int width, int height, int stride) {
+float calculateStdDevFloat(float * d_data, int width, int height, int stride) {
 
+  float *d_sums{nullptr}, *d_qsums{nullptr};
   int new_width = (int)(512*floor(width/512.));
   int nblocks = new_width*height / 512;
 
-  size_t required_sums_size = sizeof(float) * nblocks;
-  if (required_sums_size > p->sums_size)
-  {
-    checkCuda(cudaFree(p->d_sums));
-    checkCuda(cudaFree(p->d_qsums));
-    checkCuda(cudaFreeHost(p->h_sums));
-    checkCuda(cudaFreeHost(p->h_qsums));
-    checkCuda(cudaMalloc(&(p->d_sums), required_sums_size));
-    checkCuda(cudaMalloc(&(p->d_qsums), required_sums_size));
-    checkCuda(cudaMallocHost(&(p->h_sums), required_sums_size));
-    checkCuda(cudaMallocHost(&(p->h_qsums), required_sums_size));
-    p->sums_size = required_sums_size;
-  }
+  checkCuda(cudaMalloc(&d_sums, sizeof(float) * nblocks));
+  checkCuda(cudaMalloc(&d_qsums, sizeof(float) * nblocks));
+  sumArrayFloat<<<nblocks,512>>>(d_data,d_sums,d_qsums,new_width,height,stride);
 
-  sumArrayFloat<<<nblocks,512>>>(d_data,p->d_sums, p->d_qsums,new_width,height,stride);
-
-  checkCuda(cudaMemcpy(p->h_sums,p->d_sums,required_sums_size,cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(p->h_qsums,p->d_qsums,required_sums_size,cudaMemcpyDeviceToHost));
+  float *sums{nullptr}, *qsums{nullptr};
+  sums = (float *)malloc(sizeof(float)*nblocks);
+  qsums = (float *)malloc(sizeof(float)*nblocks);
+  checkCuda(cudaMemcpy(sums,d_sums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
+  checkCuda(cudaMemcpy(qsums,d_qsums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
 
   float sum=0., qsum=0.;
   for (int i=0;i<nblocks;i++) {
-    sum += p->h_sums[i];
-    qsum += p->h_qsums[i];
+    sum += sums[i];
+    qsum += qsums[i];
   }
   float mn = sum/(new_width*height*1.);
 
@@ -731,20 +681,24 @@ float calculateStdDevFloat(pinfo* p, float * d_data, int width, int height, int 
   stdDev /= 1.*new_width*height;
   stdDev = sqrt(stdDev);
 
+  checkCuda(cudaFree(d_sums));
+  checkCuda(cudaFree(d_qsums));
+  free(sums);
+  free(qsums);
+
   return stdDev;
 }
 
 
-/*
 // warp reduce half
-__device__ void warpReduceHalf(volatile half *data, int tid) {
+/*__device__ void warpReduceHalf(volatile half *data, int tid) {
   data[tid] = data[tid] + data[tid + 32];
   data[tid] = data[tid] + data[tid + 16];
   data[tid] = data[tid] + data[tid + 8];
   data[tid] = data[tid] + data[tid + 4];
   data[tid] = data[tid] + data[tid + 2];
   data[tid] = data[tid] + data[tid + 1];
-}*/
+  }*/
 
 // add bandpasses
 // add_bandpass<<<NCHAN*NBATCH/32,32>>>(d_mask,d_flagSpec);
@@ -758,58 +712,25 @@ __global__ void add_bandpass(float * d_mask, float * d_flagSpec) {
 
 }
 
-// in each block, warps will compute the bandpass for a single channel
-// each block will write out 256/32 channels
-// grid handles the rest
-__global__ void calc_bandpass_new(const __restrict__ half * data, float * bandpass, int width, int stride)
-{
-  const unsigned warp_idx = threadIdx.x & 0x1F; // % 32;
-  const unsigned warp_num = threadIdx.x / warpSize;
-  const unsigned channelbeam = (blockIdx.x * 8) + warp_num;
-  unsigned idx = (channelbeam * stride) + warp_idx;
-
-  const int npartials = width / 32; // number partial sums
-  float sum = 0;
-  for (unsigned i=0; i<npartials; i++)
-  {
-    const float raw = __half2float(data[idx]);
-    idx += warpSize;
-    sum += raw;
-  }
-
-  // warp level reduction
-  for (int offset = 16; offset > 0; offset /= 2)
-  {
-    sum += __shfl_down_sync(0xffffffff, sum, offset);
-  }
-
-  if (warp_idx == 0)
-  {
-    bandpass[channelbeam] = sum / float(width);
-  }
-}
-
 // kernel to calculate bandpass
 // launch with NCHAN*NBATCH blocks of 256 threads
 // will ignore last (width % 256) times
-__global__ void calc_bandpass(const __restrict__ half * data, float * bandpass, int width, int stride) {
+__global__ void calc_bandpass(half * data, float * bandpass, int width, int stride) {
+
   int bid = blockIdx.x;
   int tid = threadIdx.x;
 
   int npartials = (int)(width / 256); // number partial sums
   half fac = (half)((256.*npartials));
-  __shared__ half psum[256];
-
+  extern __shared__ half psum[256];
 
   // calculate partial sums
   int idx0 = bid*stride + tid*npartials;
   psum[tid] = 0.;
-  int count = 0;
   for (int i=idx0;i<npartials+idx0;i++)
-  {
     psum[tid] += data[i];
-  }
   psum[tid] /= fac;
+
   __syncthreads();
 
   // sum over shared memory
@@ -825,6 +746,7 @@ __global__ void calc_bandpass(const __restrict__ half * data, float * bandpass, 
   __syncthreads();
 
   if (tid==0) bandpass[bid] = __half2float(psum[0]);
+
 }
 
 // Function to swap two float values
@@ -855,7 +777,7 @@ float findMedian(float arr[], int n) {
 float medianFilter(float *input, float *output, int size, int windowSize) {
 
     if (windowSize % 2 == 0) {
-        spdlog::info("Error: Window size must be odd.");
+        printf("Error: Window size must be odd.\n");
         return 0.;
     }
 
@@ -895,18 +817,19 @@ float medianFilter(float *input, float *output, int size, int windowSize) {
 }
 
 // function to orchestrate host median filtering of bandpass
-float medFilterBandpass(pinfo* p)
-{
-  // float * hbp = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
-  // float * mhbp = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
-  cudaMemcpy(p->h_bp, p->d_bp,sizeof(float)*NBATCH*NCHAN,cudaMemcpyDeviceToHost);
-  float mn_bp = medianFilter(p->h_bp,p->h_mbp,NBATCH*NCHAN,NMEDFILT);
-  cudaMemcpy(p->d_bp, p->h_mbp,sizeof(float)*NBATCH*NCHAN,cudaMemcpyHostToDevice);
+float medFilterBandpass(float * d_bandpass) {
 
-  // free(hbp);
-  // free(mhbp);
+  float * hbp = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
+  float * mhbp = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
+  cudaMemcpy(hbp,d_bandpass,sizeof(float)*NBATCH*NCHAN,cudaMemcpyDeviceToHost);
+  float mn_bp = medianFilter(hbp,mhbp,NBATCH*NCHAN,NMEDFILT);
+  cudaMemcpy(d_bandpass,mhbp,sizeof(float)*NBATCH*NCHAN,cudaMemcpyHostToDevice);
+
+  free(hbp);
+  free(mhbp);
 
   return mn_bp;
+
 }
 
 // function to orchestrate host median filtering of time series
@@ -924,13 +847,13 @@ void medFilterTs(float * d_ts, int width) {
 }
 
 // cuda kernel to divide data by bandpass
-// run with NBATCH*NCHAN*width/64 blocks of 64 threads
+// run with NBATCH*NCHAN*width/32 blocks of 32 threads
 __global__ void divide_by_bp(half * data, float * bp, int width, int stride) {
 
   int bid = blockIdx.x;
   int tid = threadIdx.x;
 
-  int idx = bid*blockDim.x+tid;
+  int idx = bid*32+tid;
   int y = (int)(idx / width);
   int x = (int)(idx % width);
   int iidx = y*stride+x;
@@ -947,9 +870,9 @@ __global__ void divide_by_ts(half * data, float * ts, int width, int stride, int
   int tid = threadIdx.x;
 
   int idx = bid*32+tid;
-  int y = (int)(idx / width);   // ibeamchan
-  int x = (int)(idx % width);   // isamp
-  int b = (int)(y / NCHAN);     // ibeam
+  int y = (int)(idx / width);
+  int x = (int)(idx % width);
+  int b = (int)(y / NCHAN);
   int tsidx = b*width+x;
   int iidx = y*stride+x;
 
@@ -959,71 +882,30 @@ __global__ void divide_by_ts(half * data, float * ts, int width, int stride, int
     if (ts[tsidx]>TIME_SERIES_HIGH_THRESHOLD) data[iidx] = __float2half(1.);
     if (ts[tsidx]<TIME_SERIES_LOW_THRESHOLD) data[iidx] = __float2half(1.);
   }
-}
 
-__global__ void divide_by_ts_new(half * data, const float * ts, int width, int stride, int flag_ts)
-{
-  // beam == blockIdx.y
-  // chan == blockIdx.z
-  // time == blockIdx.x * blockDim.x + threadIdx.x
 
-  int isamp = blockIdx.x * blockDim.x + threadIdx.x;
-  if (isamp >= width)
-    return;
-
-  // common scale factor by which all channels are divided
-  const float facf = ts[blockIdx.y * stride + isamp];
-
-  // special case to flagging all channels
-  // bool flag = (flag_ts == 1 && (facf > TIME_SERIES_HIGH_THRESHOLD || facf < TIME_SERIES_LOW_THRESHOLD));
-  // if (flag)
-  // {
-  //   int idx = (blockIdx.y * NCHAN * stride) + isamp;
-  //   for (int ichan=0; ichan<NCHAN; ichan++)
-  //   {
-  //     data[idx] = 1;
-  //     idx += stride;
-  //   }
-  // }
-  // else
-  {
-    const half fac = __float2half(facf);
-
-    const int idx = ((blockIdx.y * NCHAN + blockIdx.z) * stride) + isamp;
-    data[idx] = __hdiv(data[idx], fac);
-    // for (int ichan=0; ichan<NCHAN; ichan++)
-    // {
-      // data[idx] = __hdiv(data[idx], fac);
-      // idx += stride;
-    // }
-  }
 }
 
 // handler for half-precision boxcar convolution from npp
-void npp_convolve_handler(pinfo* p, half * data, half * output, float scfac, int xw, int yw, int width, int stride) {
+void npp_convolve_handler(half * data, half * output, float scfac, int xw, int yw, int width, int stride) {
 
   NppiSize oSrcSize = {stride,NCHAN*NBATCH};
   NppiPoint oSrcOffset = {0,0};
   Npp32f * pKernel{nullptr};
   NppiSize pKernelSize = {xw,yw};
   NppiPoint oAnchor = {(int)(xw/2),(int)(yw/2)};
+  float * h_kernel{nullptr};
+  const size_t kernel_bytes = sizeof(float)*xw*yw;
+  checkCuda(cudaMalloc((void **)(&pKernel), kernel_bytes));
+  h_kernel  = (float *)malloc(kernel_bytes);
+  for (int i=0;i<xw*yw;i++) h_kernel[i] = scfac;
+  checkCuda(cudaMemcpy(pKernel,h_kernel, kernel_bytes,cudaMemcpyHostToDevice));
 
-  size_t required_kernel_size = sizeof(float) * xw * yw;
-  if (required_kernel_size > p->smooth_kernel_size)
-  {
-    checkCuda(cudaFree(p->d_kernel));
-    checkCuda(cudaFreeHost(p->h_kernel));
-    checkCuda(cudaMalloc(&(p->d_kernel), required_kernel_size));
-    checkCuda(cudaMallocHost(&(p->h_kernel), required_kernel_size));
-    p->smooth_kernel_size = required_kernel_size;
-  }
-  for (int i=0;i<xw*yw;i++)
-  {
-    p->h_kernel[i] = scfac;
-  }
-  checkCuda(cudaMemcpy(p->d_kernel, p->h_kernel, required_kernel_size, cudaMemcpyHostToDevice));
+  checkNpp(nppiFilterBorder32f_16f_C1R((Npp16f *)data,stride*2,oSrcSize,oSrcOffset,(Npp16f *)output,stride*2,oSrcSize,pKernel,pKernelSize,oAnchor,NPP_BORDER_REPLICATE));
 
-  checkNpp(nppiFilterBorder32f_16f_C1R((Npp16f *)data,stride*2,oSrcSize,oSrcOffset,(Npp16f *)output,stride*2,oSrcSize,p->d_kernel,pKernelSize,oAnchor,NPP_BORDER_REPLICATE));
+  checkCuda(cudaFree(pKernel));
+  free(h_kernel);
+
 }
 
 
@@ -1092,39 +974,33 @@ __global__ void divide_by_array(half * data, half * arr, int width, int stride) 
 
 // cuda kernel to multiply data by number
 // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-__global__ void multiply_by_number(half * data, half num, int width, int stride) {
+__global__ void multiply_by_number(half * data, float num, int width, int stride) {
 
   int bid = blockIdx.x;
   int tid = threadIdx.x;
 
-  int idx = bid*blockDim.x+tid;
+  int idx = bid*32+tid;
   int y = (int)(idx / width);
   int x = (int)(idx % width);
   int iidx = y*stride+x;
 
-  data[iidx] *= num;
-}
+  data[iidx] *= __float2half(num);
 
-__global__ void add_then_multiply_by_number(half * data, half a, half c, int width, int stride)
-{
-  int isamp = blockIdx.x * blockDim.x + threadIdx.x;
-  if (isamp >= width)
-    return;
-
-  int idx = (blockIdx.y * stride) + isamp;
-  data[idx] = (data[idx] + a) * c;
 }
 
 // cuda kernel to add number to data
 // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-__global__ void add_number(half * data, half num, int width, int stride)
-{
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void add_number(half * data, float num, int width, int stride) {
+
+  int bid = blockIdx.x;
+  int tid = threadIdx.x;
+
+  int idx = bid*32+tid;
   int y = (int)(idx / width);
   int x = (int)(idx % width);
   int iidx = y*stride+x;
 
-  data[iidx] += num;
+  data[iidx] += __float2half(num);
 
 }
 
@@ -1154,35 +1030,16 @@ __global__ void replace_data_bandpass(half * data, float * bp, float repval, int
   int bid = blockIdx.x;
   int tid = threadIdx.x;
 
-  int idx = bid*blockDim.x+tid;
+  int idx = bid*32+tid;
   int y = (int)(idx / width);
   int x = (int)(idx % width);
   int iidx = y*stride+x;
 
   if (bp[y]<t1 || bp[y]>t2)
     data[iidx] = repval;
+
 }
 
-__global__ void replace_data_and_add_bandpass(half * data, const float * bp, int width, int stride, float t1, float t2)
-{
-  // __shared__ float bps[16];
-
-  // load 16 bandpass values into shm
-  // if (threadIdx.x < 16)
-    // bps[threadIdx.x] = bp[blockIdx.y * 16 + threadIdx.x];
-  // __syncthreads();
-
-  const int ibeamchan = (blockIdx.y * blockDim.y) + threadIdx.y;
-  const float bp_val = bp[ibeamchan];
-  const int idx = ibeamchan * stride + (blockIdx.x * blockDim.x) + threadIdx.x;
-  if (bp_val < t1 || bp_val > t2)
-  {
-    data[idx] = __half(1);
-  }
-  else {
-    data[idx] += __half(1);
-  }
-}
 
 // cuda kernel to replace masked values
 // run with NBATCH*NCHAN*width/32 blocks of 32 threads
@@ -1256,10 +1113,10 @@ __global__ void transpose_output(unsigned char * beam, half * data, int width) {
   float v, scf;
   for (int j = 0; j < 32; j += 8) {
     v = __half2float(tile[threadIdx.x][threadIdx.y + j]);
-    scf = 255.f/14.f;
-    v = scf*(v+4.f);
-    if (v<0.f) v = 0.f;
-    if (v>255.f) v = 255.f;
+    scf = 255./14.;
+    v = scf*(v+4.);
+    if (v<0.) v = 0;
+    if (v>255.) v = 255.;
     beam[(y+j)*mywidth + x] = (unsigned char)(v);
   }
 
@@ -1267,43 +1124,36 @@ __global__ void transpose_output(unsigned char * beam, half * data, int width) {
 
 // TODO: handle_transpose_input and handle_transpose_output to do transpose via memcpy2d from intermediate array
 
-void transpose_input_handler(pinfo* p, unsigned char * d_data, half * batch, int width, int stride) {
+void transpose_input_handler(unsigned char * d_data, half * batch, int width, int stride) {
 
   dim3 dimBlockIn(32, 8), dimGridIn(NCHAN/32, width/32);
-
-  size_t required_size = sizeof(half) * NCHAN * width;
-  if (required_size > p->d_scratch_size)
-  {
-    checkCuda(cudaMalloc(&(p->d_scratch), required_size));
-    p->d_scratch_size = required_size;
-  }
+  half * tmpBuffer{nullptr};
+  checkCuda(cudaMalloc(&tmpBuffer, sizeof(half) * NCHAN * width));
 
   // do transpose by beam
   for (uint64_t bm=0; bm<NBATCH; bm++) {
-    transpose_input<<<dimGridIn,dimBlockIn>>>(d_data+bm*NCHAN*width,reinterpret_cast<half*>(p->d_scratch),width);
-    checkCuda(cudaMemcpy2D(batch+bm*NCHAN*stride,stride*sizeof(half),p->d_scratch,width*sizeof(half),width*sizeof(half),NCHAN,cudaMemcpyDeviceToDevice));
+    transpose_input<<<dimGridIn,dimBlockIn>>>(d_data+bm*NCHAN*width,tmpBuffer,width);
+    checkCuda(cudaMemcpy2D(batch+bm*NCHAN*stride,stride*sizeof(half),tmpBuffer,width*sizeof(half),width*sizeof(half),NCHAN,cudaMemcpyDeviceToDevice));
   }
 
   checkCuda(cudaDeviceSynchronize());
+  checkCuda(cudaFree(tmpBuffer));
 }
 
-void transpose_output_handler(pinfo* p, unsigned char * d_data, half * batch, int width, int stride) {
+void transpose_output_handler(unsigned char * d_data, half * batch, int width, int stride) {
 
   dim3 dimBlockOut(32, 8), dimGridOut(width/32, NCHAN/32);
-  size_t required_size = sizeof(half) * NCHAN * width;
-  if (required_size > p->d_scratch_size)
-  {
-    checkCuda(cudaMalloc(&(p->d_scratch), required_size));
-    p->d_scratch_size = required_size;
-  }
+  half * tmpBuffer;
+  checkCuda(cudaMalloc(&tmpBuffer, NCHAN * width * sizeof(half)));
 
   // do transpose by beam
   for (int bm=0; bm<NBATCH; bm++) {
-    checkCuda(cudaMemcpy2D(p->d_scratch,width*sizeof(half),batch+bm*NCHAN*stride,stride*sizeof(half),width*sizeof(half),NCHAN,cudaMemcpyDeviceToDevice));
-    transpose_output<<<dimGridOut,dimBlockOut>>>(d_data+bm*NCHAN*width,reinterpret_cast<half*>(p->d_scratch),width);
+    checkCuda(cudaMemcpy2D(tmpBuffer,width*sizeof(half),batch+bm*NCHAN*stride,stride*sizeof(half),width*sizeof(half),NCHAN,cudaMemcpyDeviceToDevice));
+    transpose_output<<<dimGridOut,dimBlockOut>>>(d_data+bm*NCHAN*width,tmpBuffer,width);
   }
 
   checkCuda(cudaDeviceSynchronize());
+  checkCuda(cudaFree(tmpBuffer));
 }
 
 // kernel to sort out time series
@@ -1320,6 +1170,46 @@ __global__ void fix_ts(half * temp_ts, float * ts, int width, int stride) {
 
 }
 
+// function to measure ts using cublas calls
+void blas_ts(half * data, half * unity, half * temp_ts, float * ts, int width, int stride) {
+
+  // set up for gemm
+  cublasHandle_t cublasH = NULL;
+  cudaStream_t stream = NULL;
+  cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  cublasCreate(&cublasH);
+  cublasSetStream(cublasH, stream);
+
+  // gemm settings
+  cublasOperation_t transa = CUBLAS_OP_N;
+  cublasOperation_t transb = CUBLAS_OP_N;
+  const int m = stride;
+  const int n = 1;
+  const int k = NCHAN;
+  const half alpha = 1./NCHAN;
+  const int lda = m;
+  const int ldb = k;
+  const half beta = 0.;
+  const int ldc = m;
+  const long long int strideA = NCHAN*stride;
+  const long long int strideB = NCHAN;
+  const long long int strideC = stride;
+  const int batchCount = NBATCH;
+
+  // run strided batched gemm
+  cublasHgemmStridedBatched(cublasH,transa,transb,m,n,k,
+                            &alpha,data,lda,strideA,
+                            unity,ldb,strideB,&beta,
+                            temp_ts,ldc,strideC,
+                            batchCount);
+
+  checkCuda(cudaDeviceSynchronize());
+
+  // run kernel to place in output
+  fix_ts<<<width*NBATCH/32,32>>>(temp_ts,ts,width,stride);
+  checkCuda(cudaDeviceSynchronize());
+
+}
 
 // cuda kernel to measure per-beam time baseline
 // run with NBATCH*width lots of 32 threads
@@ -1355,44 +1245,29 @@ __global__ void measure_ts(half * data, float * ts, int width, int stride) {
   __syncthreads();
 
   if (tid==0) ts[bid] = __half2float(cpsum[0]);
-}
 
-__global__ void measure_ts_new(half * data, float * ts, int width, int stride)
-{
-  // beam == blockIdx.y
-  // time == blockIdx.x * blockDim.x + threadIdx.x
-
-  int isamp = blockIdx.x * blockDim.x + threadIdx.x;
-  if (isamp >= width)
-    return;
-
-  int idx = (blockIdx.y * NCHAN * stride) + isamp;
-  half sum = 0;
-  for (int ichan=0; ichan<NCHAN; ichan++)
-  {
-    sum += data[idx];
-    idx += stride;
-  }
-  ts[blockIdx.y * width + isamp] = __half2float(sum) / float(NCHAN);
 }
 
 // function to bandpass-correct data
-// divides the input data via the mean of the bandpass to normalize it
-float bandpass_correct(pinfo * p, half * data, int width, int stride) {
+float bandpass_correct(half * data, int width, int stride) {
+
+  // allocate bandpass
+  float * d_bandpass{nullptr};
+  checkCuda(cudaMalloc(&d_bandpass, NBATCH * NCHAN * sizeof(float)));
 
   // calculate bandpass
-  calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(data, p->d_bp, width, stride);
+  calc_bandpass<<<NCHAN*NBATCH,256>>>(data, d_bandpass, width, stride);
 
   checkCuda(cudaDeviceSynchronize());
 
   // median filter bandpass
-  float mn_bp = medFilterBandpass(p);
+  float mn_bp = medFilterBandpass(d_bandpass);
 
   // correct bandpass in data
-  const unsigned nt = 512;
-  divide_by_bp<<<NBATCH*NCHAN*width/nt,nt>>>(data, p->d_bp, width, stride);
+  divide_by_bp<<<NBATCH*NCHAN*width/32,32>>>(data,d_bandpass,width,stride);
 
   checkCuda(cudaDeviceSynchronize());
+  checkCuda(cudaFree(d_bandpass));
 
   return mn_bp;
 
@@ -1402,31 +1277,21 @@ float bandpass_correct(pinfo * p, half * data, int width, int stride) {
 void ts_correct(half * data, float * d_ts, int width, int stride) {
 
   // calculate ts
-  // measure_ts<<<NBATCH*width,32>>>(data, d_ts, width, stride);
+  measure_ts<<<NBATCH*width,32>>>(data, d_ts, width, stride);
 
-  // calculate ts in the new way
-  dim3 blockDim(256, 1, 1);
-  dim3 gridDim(width/blockDim.x, NBATCH, 1);
-  if (width % blockDim.x != 0)
-    gridDim.x++;
-  measure_ts_new<<<gridDim, blockDim>>>(data, d_ts, width, stride);
-
-  // checkCuda(cudaDeviceSynchronize());
+  checkCuda(cudaDeviceSynchronize());
 
   // median filter ts
   //medFilterTs(d_ts,width);
 
   // correct ts in data
-  // divide_by_ts<<<NBATCH*NCHAN*width/32,32>>>(data,d_ts,width,stride,0);
-
-  gridDim.z = NCHAN;
-  divide_by_ts_new<<<gridDim, blockDim>>>(data,d_ts,width,stride,0);
+  divide_by_ts<<<NBATCH*NCHAN*width/32,32>>>(data,d_ts,width,stride,0);
   checkCuda(cudaDeviceSynchronize());
 }
 
 
 // function to remove time-frequency baseline
-void remove_tf_baseline(pinfo* p, half * data, int width, int stride) {
+void remove_tf_baseline(half * data, int width, int stride) {
 
   // allocate smooth array
   half * d_smooth;
@@ -1434,7 +1299,7 @@ void remove_tf_baseline(pinfo* p, half * data, int width, int stride) {
 
   // smooth data
   //smooth_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
-  npp_convolve_handler(p, data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
+  npp_convolve_handler(data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
 
   // divide by smoothed data
   divide_by_array<<<NBATCH*NCHAN*width/32,32>>>(data,d_smooth,width,stride);
@@ -1445,75 +1310,56 @@ void remove_tf_baseline(pinfo* p, half * data, int width, int stride) {
 }
 
 // function to normalize data
-// assume initial mean is 1 due to previous bandpass divide
-void normalize_data(pinfo *p, half * data, int width, int stride) {
+// assume initial mean is 1
+void normalize_data(half * data, int width, int stride) {
 
-  float stdDev = calculateStdDev(p, data,width,NBATCH*NCHAN,stride);
+  float stdDev = calculateStdDev(data,width,NBATCH*NCHAN,stride);
 
-  int nt = 512;
+  add_number<<<NBATCH*NCHAN*width/32,32>>>(data,-1.,width,stride);
 
-  half c = __float2half(-1);
-  half m = __float2half(1.f/stdDev);
-  // add_number<<<NBATCH*NCHAN*width/nt,nt>>>(data,c,width,stride);
-  // multiply_by_number<<<NBATCH*NCHAN*width/nt,nt>>>(data,m,width,stride);
-
-  dim3 gridDim(width/nt, NBATCH*NCHAN, 1);
-  if (width % nt != 0)
-    gridDim.x++;
-  add_then_multiply_by_number<<<gridDim,nt>>>(data,c,m,width,stride);
+  multiply_by_number<<<NBATCH*NCHAN*width/32,32>>>(data,1./stdDev,width,stride);
   checkCuda(cudaDeviceSynchronize());
 }
 
 // function to implement bandpass flagging on data
-float bandpass_flag(pinfo * p, half * data)
-{
+float bandpass_flag(pinfo * p, half * data) {
+
   // bandpass correct
-  float mn_bp = bandpass_correct(p, data,p->NTIME, p->batch_stride);
+  float mn_bp = bandpass_correct(data,p->NTIME, p->batch_stride);
 
   // normalize data
-  normalize_data(p, data, p->NTIME, p->batch_stride);
+  normalize_data(data,p->NTIME, p->batch_stride);
 
   // calculate bandpass
-  calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(data, p->d_bp, p->NTIME, p->batch_stride);
+  calc_bandpass<<<NCHAN*NBATCH,256>>>(data, p->d_bpout, p->NTIME, p->batch_stride);
 
-  #ifdef OLD_HELLA
   // flag data
   replace_data_bandpass<<<NBATCH*NCHAN*p->NTIME/32,32>>>(data, p->d_bpout, 0., p->NTIME, p->batch_stride, p->spec_min, p->spec_max);
+
   // finish up
-  add_number<<<NBATCH*NCHAN*p->NTIME/32,32>>>(data,__float2half(1.f),p->NTIME, p->batch_stride);
-  #else
-  // fuse the replace_data_bandpass and add_number kernels
-  dim3 blockDim(32 ,16 ,1);
-  dim3 gridDim(p->NTIME/blockDim.x, NBATCH*NCHAN/blockDim.y, 1);
-  if (p->NTIME % blockDim.x != 0)
-    gridDim.x++;
-  replace_data_and_add_bandpass<<<gridDim,blockDim>>>(data, p->d_bp, p->NTIME, p->batch_stride, p->spec_min, p->spec_max);
-  #endif
+  add_number<<<NBATCH*NCHAN*p->NTIME/32,32>>>(data,1.,p->NTIME, p->batch_stride);
 
   return mn_bp;
+
 }
 
 // function to apply a single scrunch to the data
 float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float * d_ts, int width, int stride, int tscrunch, int fscrunch, float thresh, int flag, int ts, float * d_flagSpec, int flag1, int flag2) {
 
   float begin, end;
-  size_t required_size = NBATCH * NCHAN * sizeof(float);
-  if (required_size > p->mask_size)
-  {
-    checkCuda(cudaMalloc(&(p->d_mask), required_size));
-    p->mask_size = required_size;
-  }
+  float * d_mask;
+  checkCuda(cudaMalloc(&d_mask, NBATCH * NCHAN * sizeof(float)));
 
   // bandpass
-  spdlog::trace("bandpass_correct");
+  //printf("bandpass\n");
   begin = clock();
-  float mn_bp = bandpass_correct(p, data,width,stride);
+  float mn_bp = bandpass_correct(data,width,stride);
   checkCuda(cudaDeviceSynchronize());
   end = clock();
   p->t1 += (float)(end - begin) / CLOCKS_PER_SEC;
 
   // baseline
-  spdlog::trace("baseline");
+  //printf("baseline\n");
   if (ts==1) {
     begin = clock();
     ts_correct(data,d_ts,width,stride);
@@ -1522,25 +1368,25 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
   }
 
   // normalize
-  spdlog::trace ("normalize_data after ts correct");
+  //printf("normalize\n");
   begin = clock();
-  normalize_data(p, data,width,stride);
+  normalize_data(data,width,stride);
   end = clock();
   p->t3 += (float)(end - begin) / CLOCKS_PER_SEC;
 
   if (flag==1) {
 
     // derive smoothed data
-    //spdlog::info("smooth");
+    //printf("smooth\n");
     begin = clock();
     //smooth_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
-    npp_convolve_handler(p, data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
+    npp_convolve_handler(data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
     p->t4 += (float)(end - begin) / CLOCKS_PER_SEC;
 
     // threshold data
-    //spdlog::info("threshold");
+    //printf("threshold\n");
     begin = clock();
     checkCuda(cudaMemset(mask,0,NBATCH*NCHAN*stride*sizeof(half)));
     threshold_data<<<NBATCH*NCHAN*width/32,32>>>(d_smooth,mask,thresh/sqrt(1.*tscrunch*fscrunch),width,stride);
@@ -1549,19 +1395,21 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
     p->t5 += (float)(end - begin) / CLOCKS_PER_SEC;
 
     // replace data after growing mask
-    //spdlog::info("replace");
+    //printf("replace\n");
     begin = clock();
     //smooth_data<<<NBATCH*NCHAN*width/32,32>>>(mask, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
-    npp_convolve_handler(p, mask, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
+    npp_convolve_handler(mask, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
     replace_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, 0., width, stride, flag1, flag2);
-    add_number<<<NBATCH*NCHAN*width/512,512>>>(data,__float2half(1.f),width,stride);
-    calc_bandpass<<<NCHAN*NBATCH,256>>>(d_smooth, reinterpret_cast<float*>(p->d_mask), width, stride);
-    add_bandpass<<<NCHAN*NBATCH/32,32>>>(reinterpret_cast<float*>(p->d_mask),d_flagSpec);
+    add_number<<<NBATCH*NCHAN*width/32,32>>>(data,1.,width,stride);
+    calc_bandpass<<<NCHAN*NBATCH,256>>>(d_smooth, d_mask, width, stride);
+    add_bandpass<<<NCHAN*NBATCH/32,32>>>(d_mask,d_flagSpec);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
     p->t6 += (float)(end - begin) / CLOCKS_PER_SEC;
 
   }
+
+  checkCuda(cudaFree(d_mask));
 
   return mn_bp;
 
@@ -1578,10 +1426,8 @@ void fastflagger(pinfo * p) {
   // setup
   int nBatches = (int)(NBEAMS / NBATCH);
   checkCuda(cudaMemset(p->d_flagSpec,0,4*NBATCH*NCHAN));
-  spdlog::debug("have nbatches {}",nBatches);
+  syslog(LOG_INFO,"have nbatches %d",nBatches);
   float mn_bp[nBatches], tmp;
-  for (unsigned i=0; i<nBatches ;i++)
-    mn_bp[i] = 0;
 
   // output bandpass
   FILE *fout{nullptr};
@@ -1593,20 +1439,23 @@ void fastflagger(pinfo * p) {
     fout=fopen(fnam,"w");
   }
 
+  //printf("fastflagger ");
+
   // loop over batches
   for (uint64_t batch = 0; batch < nBatches; batch++) {
 
     // load a batch
+    //printf("transpose input %d of %d\n",batch+1,nBatches);
     begin = clock();
-    transpose_input_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
+    transpose_input_handler(p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
     end = clock();
     p->t7 += (float)(end - begin) / CLOCKS_PER_SEC;
 
     // output init bandpass
     if (p->output_bandpass>0) {
       begin = clock();
-      calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
-      checkCuda(cudaMemcpy(h_bpout, p->d_bpout,NBATCH*NCHAN*4,cudaMemcpyDeviceToHost));
+      calc_bandpass<<<NCHAN*NBATCH,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
+      checkCuda(cudaMemcpy(h_bpout,p->d_bpout,NBATCH*NCHAN*4,cudaMemcpyDeviceToHost));
       for (int i=0;i<NBATCH*NCHAN;i++)
         fprintf(fout,"%g\n",h_bpout[i]);
       end = clock();
@@ -1618,11 +1467,12 @@ void fastflagger(pinfo * p) {
 
     // loop over scrunches
     for (int scrnch=0;scrnch<p->nscrunches;scrnch++) {
-      spdlog::info("scrunch %d...",scrnch);
+      //printf("scrunch %d...",scrnch);
       tmp = apply_scrunch(p, p->batch, p->mask, p->d_smooth, p->d_ts, p->NTIME, p->batch_stride, p->scrunches[scrnch].tscrunch,p->scrunches[scrnch].fscrunch, p->scrunches[scrnch].thresh,1,0,p->d_flagSpec,p->flag1,p->flag2);
       checkCuda(cudaDeviceSynchronize());
     }
     tmp = apply_scrunch(p, p->batch, p->mask, p->d_smooth, p->d_ts, p->NTIME, p->batch_stride, 8, 8, 100., 0, 1, p->d_flagSpec,p->flag1,p->flag2);
+    //    printf("\n");
 
     checkCuda(cudaDeviceSynchronize());
 
@@ -1639,22 +1489,18 @@ void fastflagger(pinfo * p) {
 
     // unload the batch
     begin = clock();
-    transpose_output_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
+    transpose_output_handler(p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
     cudaMemcpy(p->h_flagSpec,p->d_flagSpec,4*NBATCH*NCHAN,cudaMemcpyDeviceToHost);
     end = clock();
     p->t7 += (float)(end - begin) / CLOCKS_PER_SEC;
 
-    //spdlog::info("done");
-    //spdlog::info("%g ",mn_bp);
+    //printf("done\n");
+    //printf("%g ",mn_bp);
 
   }
+  //printf("\n");
 
-  std::ostringstream oss;
-  for (unsigned i=0; i<nBatches; i++)
-  {
-    oss << " " << mn_bp[i];
-  }
-  spdlog::debug("fastflagger {}", oss.str());
+  syslog(LOG_INFO,"fastflagger %g %g %g %g",mn_bp[0],mn_bp[1],mn_bp[2],mn_bp[3]);
 
   if (p->output_bandpass>0) {
     sprintf(fnam,"mv /home/ubuntu/data/bpout_%d.tmp /home/ubuntu/data/bpout_%d.out",p->output_bandpass,p->output_bandpass);
@@ -1711,7 +1557,7 @@ void apply_batch_test(float * input, float * output, int width, int stride) {
 
   /// APPLY TEST HERE
 
-  //transpose_input_handler(p, d_input,batch,width,stride);
+  //transpose_input_handler(d_input,batch,width,stride);
 
   float * d_ts, begin, end;
   cudaMalloc(&d_ts, NBATCH * width * sizeof(float));
@@ -1722,12 +1568,12 @@ void apply_batch_test(float * input, float * output, int width, int stride) {
   //measure_ts<<<NBATCH*width,32>>>(batch, d_ts, width, stride);
   ts_correct(batch, d_ts, width, stride);
   end = clock();
-  spdlog::info("Time %g\n",(float)(end - begin) / CLOCKS_PER_SEC);
+  printf("Time %g\n",(float)(end - begin) / CLOCKS_PER_SEC);
 
   cudaMemcpy(output,d_ts,NBATCH * width * sizeof(float),cudaMemcpyDeviceToHost);
 
 
-  //transpose_output_handler(p, d_input,batch,width,stride);
+  //transpose_output_handler(d_input,batch,width,stride);
 
   //unload_test<<<NBATCH*NCHAN*width/32,32>>>(d_data,batch,width,stride);
   //cudaMemcpy(output,d_data,sizeof(float)*NBATCH*NCHAN*width,cudaMemcpyDeviceToHost);
@@ -1738,49 +1584,6 @@ void apply_batch_test(float * input, float * output, int width, int stride) {
 
 /************ END *************/
 
-
-std::string get_dedisp_error(int dedisp_error_code)
-{
-  switch (dedisp_error_code)
-  {
-    case DEDISP_NO_ERROR:
-      return "no error";
-	  case DEDISP_MEM_ALLOC_FAILED:
-        return "mem alloc failed";
-	  case DEDISP_MEM_COPY_FAILED:
-      return "mem copy failed";
-	  case DEDISP_NCHANS_EXCEEDS_LIMIT:
-      return "nchans exceeds limit";
-	  case DEDISP_INVALID_PLAN:
-      return "invalid plan";
-	  case DEDISP_INVALID_POINTER:
-      return "invalid pointer";
-	  case DEDISP_INVALID_STRIDE:
-      return "invalid stride";
-	  case DEDISP_NO_DM_LIST_SET:
-      return "no dm list set";
-	  case DEDISP_TOO_FEW_NSAMPS:
-      return "too few nsamps";
-	  case DEDISP_INVALID_FLAG_COMBINATION:
-      return "invalid flag combination";
-	  case DEDISP_UNSUPPORTED_IN_NBITS:
-      return "unsupported in nbits";
-	  case DEDISP_UNSUPPORTED_OUT_NBITS:
-      return "unsupported out nbits";
-	  case DEDISP_INVALID_DEVICE_INDEX:
-      return "invalid device index";
-	  case DEDISP_DEVICE_ALREADY_SET:
-      return "device already set";
-	  case DEDISP_PRIOR_GPU_ERROR:
-      return "prior gpu error";
-	  case DEDISP_INTERNAL_GPU_ERROR:
-      return "internal gpu error";
-	  case DEDISP_UNKNOWN_ERROR:
-      return "unknown error";
-    default:
-      return "unknown code";
-  }
-}
 
 // function to do all dedispersion stuff
 void dedisperse(pinfo *p, int beam) {
@@ -1806,11 +1609,8 @@ void dedisperse(pinfo *p, int beam) {
                               out, out_nbits, out_stride,
                               flags);
 
-  if (derror != DEDISP_NO_ERROR)
-  {
-    spdlog::error("DEDISP ERROR {}", get_dedisp_error(derror));
-    exit(EXIT_FAILURE);
-  }
+  if (derror!=0)
+    std::cout << "DEDISP ERROR " << derror << std::endl;
   //cudaMemcpy2D(p->d_dedisp,p->d_dedisp_step,p->h_dedisp,4*p->ntime_dd,4*p->ntime_dd,p->ndms,cudaMemcpyHostToDevice);
   checkCuda(cudaMemcpy2D(p->d_dedisp,p->d_dedisp_step,p->d_dedispPacked,4*p->ntime_dedisp,4*p->ntime_dd,p->ndms,cudaMemcpyDeviceToDevice));
 
@@ -1818,12 +1618,11 @@ void dedisperse(pinfo *p, int beam) {
 
 void smooth(pinfo *p, int scale) {
 
-  spdlog::debug("smooth scale={}", scale);
   NppiSize oSrcSize = {p->ntime_dd,p->ndms};
   NppiPoint oSrcOffset = {0,0};
   NppiSize oSizeROI = {p->ntime_dd,p->ndms};
   NppiSize oOutROI = {p->ntime_out,p->ndms-2};
-  // Npp32f * pKernel{nullptr};
+  Npp32f * pKernel;
   Npp32f w[3] = {0.3,1.,0.3};
   Npp32f v, filtSum;
   NppiSize pKernelSize;
@@ -1834,45 +1633,37 @@ void smooth(pinfo *p, int scale) {
   Npp32f * zeros = nppiMalloc_32f_C1(p->ntime_dd,1,&(zeros_step));
   nppiSet_32f_C1R(0.,zeros,zeros_step,oROI);*/
 
-  // perform single maximal allocation
-  int sm = static_cast<int>(powf(p->maxWidth, 2));
-  size_t required_kernel_size = sizeof(float)*(2*sm+1)*3;
-  if (required_kernel_size > p->smooth_kernel_size)
-  {
-    checkCuda(cudaFree(p->d_kernel));
-    checkCuda(cudaFreeHost(p->h_kernel));
-    checkCuda(cudaMalloc(&(p->d_kernel), required_kernel_size));
-    checkCuda(cudaMallocHost(&(p->h_kernel), required_kernel_size));
-    p->smooth_kernel_size = required_kernel_size;
-  }
+  float * h_kernel;
 
   int smit = 0;
   for (int sm=(int)(p->minWidth); sm<(int)(p->maxWidth); sm *= 2) {
 
     // do smooth
     pKernelSize = {2*sm+1,3};
+    cudaMalloc((void **)(&pKernel), 4*(2*sm+1)*3);
+    h_kernel  = (float *)malloc(sizeof(float)*(2*sm+1)*3);
     filtSum = 0.;
     for (int i=0;i<3;i++) {
       for (int j=0;j<2*sm+1;j++) {
         v = 1.-0.5*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))+0.25*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))*0.25*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))-0.083*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))*0.083*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))*0.083*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355));
-        p->h_kernel[i*(2*sm+1)+j] = w[i]*v*v;
+        h_kernel[i*(2*sm+1)+j] = w[i]*v*v;
         filtSum += w[i]*v*v;
       }
     }
     oAnchor = {0,1};
-    for (int i=0;i<(2*sm+1)*3;i++)
-    {
-      p->h_kernel[i] /= filtSum;
-    }
-    checkCuda(cudaMemcpy(p->d_kernel, p->h_kernel,4*(2*sm+1)*3,cudaMemcpyHostToDevice));
+    for (int i=0;i<(2*sm+1)*3;i++) h_kernel[i] /= filtSum;
+    checkCuda(cudaMemcpy(pKernel,h_kernel,4*(2*sm+1)*3,cudaMemcpyHostToDevice));
 
     //nppiFilterBorder_32f_C1R(p->d_dedisp,p->d_dedisp_step,oSrcSize,oSrcOffset,p->boxes+smit*p->ndms*p->boxes_step/sizeof(float),p->boxes_step,oSizeROI,pKernel,pKernelSize,oAnchor,NPP_BORDER_REPLICATE);
-    checkNpp(nppiFilterBorder_32f_C1R(p->d_dedisp,p->d_dedisp_step,oSrcSize,oSrcOffset,p->imbox,p->imbox_step,oSizeROI,p->d_kernel,pKernelSize,oAnchor,NPP_BORDER_REPLICATE));
+    checkNpp(nppiFilterBorder_32f_C1R(p->d_dedisp,p->d_dedisp_step,oSrcSize,oSrcOffset,p->imbox,p->imbox_step,oSizeROI,pKernel,pKernelSize,oAnchor,NPP_BORDER_REPLICATE));
 
     // get rid of first and last DM, and maxWidth/2 from each edge
     checkCuda(cudaMemcpy2D(p->boxes+smit*(p->ndms-2)*p->boxes_step/sizeof(float),p->boxes_step,p->imbox+p->imbox_step/sizeof(float)+(int)(p->maxWidth)/2,p->imbox_step,sizeof(float)*p->ntime_out,p->ndms-2,cudaMemcpyDeviceToDevice));
 
     smit++;
+    checkCuda(cudaFree(pKernel));
+    free(h_kernel);
+
   }
 
   // zero mean, std 1
@@ -1890,6 +1681,10 @@ void smooth(pinfo *p, int scale) {
 
     }
   }
+
+  //cudaFree(pKernel);
+  //free(h_kernel);
+
 }
 
 // code to empirically measure thresholds
@@ -1911,7 +1706,7 @@ __global__ void generate_randoms(curandState* globalState, float* randoms)
 void measure_thresholds(pinfo *p) {
 
   // generate data
-  spdlog::info("THRESHOLD: Generating random values");
+  printf("THRESHOLD: Generating random values\n");
   int threads = 256;
   int blocks = (NCHAN/256)*p->NTIME / 2;
   int threadCount = blocks * threads;
@@ -1924,7 +1719,7 @@ void measure_thresholds(pinfo *p) {
   generate_randoms<<<blocks, threads>>>(dev_curand_states, randomValues);
 
   // prepare for dedispersion
-  spdlog::info("THRESHOLD: dedisperse and smooth");
+  printf("THRESHOLD: dedisperse and smooth\n");
   NppiSize preROI = {NCHAN,p->NTIME};
   cudaMemcpy(p->dataFT,randomValues,4*N,cudaMemcpyDeviceToDevice);
   nppiScale_32f8u_C1R(p->dataFT,p->dataFT_step,p->d_datapreT,p->d_datapreT_step,preROI,-4.,10.);
@@ -1937,7 +1732,7 @@ void measure_thresholds(pinfo *p) {
   smooth(p,0);
 
   // measure stats
-  spdlog::info("THRESHOLD: measure stats");
+  printf("THRESHOLD: measure stats\n");
   Npp64f *pMean, *pStd;
   NppiSize oSizeROI = {p->ntime_dd,p->ndms};
   int nBufferSize;
@@ -1956,9 +1751,9 @@ void measure_thresholds(pinfo *p) {
   cudaMemcpy(hMean,pMean,sizeof(double)*p->nboxcar,cudaMemcpyDeviceToHost);
   cudaMemcpy(hStd,pStd,sizeof(double)*p->nboxcar,cudaMemcpyDeviceToHost);
 
-  spdlog::info("(Boxcar) Mean Std");
+  printf("(Boxcar) Mean Std\n");
   for (int i=0;i<p->nboxcar;i++)
-    spdlog::info("(%d) %g %g\n",i,hMean[i],hStd[i]);
+    printf("(%d) %g %g\n",i,hMean[i],hStd[i]);
 
   // scale sigmas by 0.95 to accommodate reduction at increased DM due to more co-added data.
 
@@ -1989,9 +1784,8 @@ void find_peaks(pinfo *p, int bm) {
     // measure rms - should be 1
     //calculateStdDevFloat(float * d_data, int width, int height, int stride) {
     if (sm==0) {
-      myStd = calculateStdDevFloat(p, p->boxes+sm*(p->ndms-2)*p->boxes_step/sizeof(float),p->ntime_out,p->ndms-2,p->boxes_step/sizeof(float));
-      // spdlog::info("bm={} p->nboxcar={} myStd={}", bm, p->nboxcar, myStd);
-      if (bm==32) spdlog::info("STDDEV {}",myStd);
+      myStd = calculateStdDevFloat(p->boxes+sm*(p->ndms-2)*p->boxes_step/sizeof(float),p->ntime_out,p->ndms-2,p->boxes_step/sizeof(float));
+      if (bm==32) syslog(LOG_INFO,"STDDEV %g",myStd);
       if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
       if (myStd<STD_DEV_VERY_LOW_THRESHOLD) myStd = 2.;
     }
@@ -2036,9 +1830,9 @@ void find_peaks(pinfo *p, int bm) {
     imax = MAX_GIANTS;
   else
     imax = p->out_npeaks+p->npeaks;
-  for (int i=p->out_npeaks;i<imax;i++)
-  {
-    spdlog::trace("find_peaks: {} {} {}", p->h_idxs[i], (int)(p->h_idxs[i] % p->ntime_dd), (int)(p->h_idxs[i] / p->ntime_dd));
+  for (int i=p->out_npeaks;i<imax;i++) {
+
+    //printf("%d %d %d\n",p->h_idxs[i],(int)(p->h_idxs[i] % p->ntime_dd),(int)(p->h_idxs[i] / p->ntime_dd));
     p->out_peaks[i] = p->peaks[i-p->out_npeaks];
     p->out_beam[i] = bm;
     p->out_samp[i] = (int)(p->h_idxs[i-p->out_npeaks] % p->ntime_out);
@@ -2070,21 +1864,12 @@ void output_peaks(pinfo *p, int samp, int restart_socket) {
 
     FILE *fout{nullptr};
     fout=fopen(p->out_path,"a");
-    if (!fout)
-    {
-      spdlog::error("failed to open p->out_path={} for appending", p->out_path);
-      throw std::runtime_error("failed to open output file for appending");
-    }
 
-    if (p->out_npeaks > 0)
-      spdlog::debug("S/N SAMP TIME WIDTH DM_IDX DM BEAM");
     for (int i=0;i<p->out_npeaks;i++) {
-      if (i < 10)
-        spdlog::debug("{} {} {} {} {} {} {}",p->out_peaks[i],p->out_samp[i]+samp,TIME_RESOLUTION*(p->out_samp[i]+samp),p->out_width[i],p->out_dm_idx[i],p->DMs[p->out_dm_idx[i]],p->out_beam[i]+p->BEAM0);
       // if (p->samp[i]>p->maxWidth/2 && p->samp[i]<=p->ntime_dd-p->maxWidth/2)
-      //   fprintf(stderr,"A %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,TIME_CONVERSION_FACTOR*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]]);
+      //   fprintf(fout,"A %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,262.144e-6*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]],bm);
       // else
-      //   fprintf(stderr,"B %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,TIME_CONVERSION_FACTOR*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]]);
+      //   fprintf(fout,"B %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,262.144e-6*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]],bm);
       fprintf(fout,"%g %d %d %g %d %d %g %d\n",p->out_peaks[i],p->out_samp[i]+samp,p->out_samp[i]+samp,TIME_RESOLUTION*(p->out_samp[i]+samp)/SECONDS_PER_DAY,p->out_width[i],p->out_dm_idx[i],p->DMs[p->out_dm_idx[i]],p->out_beam[i]+p->BEAM0);
 
     }
@@ -2104,11 +1889,11 @@ void output_peaks(pinfo *p, int samp, int restart_socket) {
     int m_sock = -1;
 
     // open socket
-    spdlog::info("opening socket");
+    syslog(LOG_INFO,"opening socket");
     memset ( &m_addr, 0, sizeof ( m_addr ) );
     m_sock = socket ( AF_INET, SOCK_STREAM, 0 );
     if (m_sock==-1) {
-      spdlog::error("Socket exception: could not create socket");
+      syslog(LOG_ERR,"Socket exception: could not create socket");
       return;
     }
 
@@ -2119,7 +1904,7 @@ void output_peaks(pinfo *p, int samp, int restart_socket) {
     sstat = connect ( m_sock, ( sockaddr * ) &m_addr, sizeof ( m_addr )) ;
 
     if (sstat!=0) {
-      spdlog::error("Socket exception: could not open socket: {}",sstat);
+      syslog(LOG_ERR,"Socket exception: could not open socket: %d",sstat);
       return;
     }
     else
@@ -2143,10 +1928,10 @@ void output_peaks(pinfo *p, int samp, int restart_socket) {
 
 
       std::string s = oss.str();
-      spdlog::info("sending data");
+      syslog(LOG_INFO,"sending data");
       sstat = send ( m_sock, s.c_str(), s.size(), MSG_NOSIGNAL );
       if (sstat==-1) {
-        spdlog::error("Socket exception: could not send cand");
+        syslog(LOG_ERR,"Socket exception: could not send cand");
         return;
       }
 
@@ -2157,10 +1942,10 @@ void output_peaks(pinfo *p, int samp, int restart_socket) {
 
     // close socket
     if (m_sock != -1) {
-      spdlog::info("closing socket AFTER");
+      syslog(LOG_INFO,"closing socket AFTER");
       sstat = close( m_sock );
       if (sstat!=0) {
-        spdlog::error("Socket exception: could not close socket: {}",sstat);
+        syslog(LOG_ERR,"Socket exception: could not close socket: %d",sstat);
         return;
       }
       m_sock = -1;
@@ -2218,6 +2003,7 @@ int read_header (FILE *inputfile) /* includefile */
   return ftell(inputfile);
 }
 
+
 // deals with data IO
 int main(int argc, char *argv[]) {
 
@@ -2229,7 +2015,7 @@ int main(int argc, char *argv[]) {
     // configuration
     if (strcmp(argv[i],"-c")==0) {
       fconf=fopen(argv[i+1],"r");
-      spdlog::info("Getting config from {}", argv[i+1]);
+      syslog(LOG_INFO,"Getting config from %s\n",argv[i+1]);
       fprintf(stderr, "Getting config from %s\n",argv[i+1]);
     }
     if (strcmp(argv[i],"-i")==0) {
@@ -2248,17 +2034,24 @@ int main(int argc, char *argv[]) {
   int currentDevice;
   cudaGetDevice(&currentDevice);
 
+  // startup syslog message
+  // using LOG_LOCAL0
+  if (currentDevice==0)
+    openlog ("dsaX_hella0", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
+  else
+    openlog ("dsaX_hella1", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
   syslog (LOG_NOTICE, "Program started by User %d", getuid ());
 
-  spdlog::info("Using GPU ID {}", currentDevice);
+
+  syslog(LOG_INFO,"Using GPU ID %d\n",currentDevice);
 
   // Bind to cpu core
   if (core >= 0)
-  {
-    spdlog::info("binding to core {}", core);
-    if (dada_bind_thread_to_core(core) < 0)
-      spdlog::error("failed to bind to core {}", core);
-  }
+    {
+      syslog(LOG_INFO,"binding to core %d\n", core);
+      if (dada_bind_thread_to_core(core) < 0)
+        syslog(LOG_ERR,"failed to bind to core %d\n", core);
+    }
 
 
   // set up pipeline, allocate appropriate mem
@@ -2282,7 +2075,7 @@ int main(int argc, char *argv[]) {
     fin=fopen(p.inp_path,"rb");
     fread(heade, sizeof(char), nbytes_header, fin);
     free(heade);
-    spdlog::info("Finished with header (nbytes {}) of input filFile {}",nbytes_header,p.inp_path);
+    syslog(LOG_INFO,"Finished with header (nbytes %d) of input filFile %s\n",nbytes_header,p.inp_path);
 
     // read data
     fread(p.data,sizeof(char),p.NTIME*NCHAN,fin);
@@ -2317,7 +2110,7 @@ int main(int argc, char *argv[]) {
       tflags += (1.*p.NTIME*p.h_flagSpec[i]);
     }
 
-    spdlog::info("TOT FLAGS %g\n",tflags);
+    printf("TOT FLAGS %g\n",tflags);
 
     exit(1);
 
@@ -2352,7 +2145,7 @@ int main(int argc, char *argv[]) {
     header_in = ipcbuf_get_next_read (hdu_in->header_block, &header_size);
     ipcbuf_mark_cleared (hdu_in->header_block);
     block_size = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_in->data_block);
-    spdlog::info("Connected to dada buffer");
+    syslog(LOG_INFO,"Connected to dada buffer\n");
 
     sscanf(p.dada_out, "%x", &out_key);
     hdu_out  = dada_hdu_create (log);
@@ -2363,7 +2156,7 @@ int main(int argc, char *argv[]) {
     memcpy (header_out, header_in, header_size);
     ipcbuf_mark_filled (hdu_out->header_block, header_size);
     block_out = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_out->data_block);
-    spdlog::info("Ready for output buffer");
+    syslog(LOG_INFO,"Ready for output buffer\n");
 
   }
 
@@ -2387,10 +2180,10 @@ int main(int argc, char *argv[]) {
     fin=fopen(p.inp_path,"rb");
     fread(heade, sizeof(char), nbytes_header, fin);
     free(heade);
-    spdlog::info("Finished with header (nbytes {}) of input filFile {}",nbytes_header,p.inp_path);
+    syslog(LOG_INFO,"Finished with header (nbytes %d) of input filFile %s\n",nbytes_header,p.inp_path);
   }
 
-  spdlog::info("Starting...");
+  syslog(LOG_INFO,"Starting...\n");
   int samp = 0;
   if (p.inp_format!=1)
     samp = -(p.NTIME-p.gulp) + (int)(p.maxWidth)/2;
@@ -2420,8 +2213,10 @@ int main(int argc, char *argv[]) {
   float tot_flags = 0.;
   int socket_count = 0;
 
-  while (finished==0)
-  {
+  while (finished==0) {
+
+    printf("start main loop inp_format=%d finished=%d\n", p.inp_format, finished);
+
     // dada input
     if (p.inp_format==0)
     {
@@ -2435,7 +2230,9 @@ int main(int argc, char *argv[]) {
 
     if (p.inp_format==2 && fin != NULL)
     {
-      fread(tmpbuf, sizeof(unsigned char), NBEAMS*p.gulp*NCHAN, fin);
+      printf("reading %d bytes\n", NBEAMS*p.gulp*NCHAN);
+      size_t bytes_just_read = fread(tmpbuf, sizeof(unsigned char), NBEAMS*p.gulp*NCHAN, fin);
+      printf("bytes just read %lu bytes\n", bytes_just_read);
     }
 
     // set up logging and reset output
@@ -2443,7 +2240,7 @@ int main(int argc, char *argv[]) {
     for (int i=0;i<NCHAN;i++) specflags[i] = 0;
     clear_peaks(&p);
 
-    spdlog::debug("Starting gulp {}",gulp);
+    syslog(LOG_INFO,"Starting gulp %d\n",gulp);
 
     const size_t beam_time_stride = p.NTIME * NCHAN;
     const size_t beam_gulp_stride = p.gulp * NCHAN;
@@ -2486,7 +2283,6 @@ int main(int argc, char *argv[]) {
     if ((gulp>0 && p.inp_format!=1) || (p.inp_format==1)) {
 
       begin = clock();
-      spdlog::debug("fastflagger");
       fastflagger(&p);
 
       // deal with flags
@@ -2520,32 +2316,31 @@ int main(int argc, char *argv[]) {
 
       // loop over beams to dedisperse and search
       // check time, out_npeaks
-      //spdlog::info("Looping over beams...");
+      //printf("Looping over beams...\n");
       bm = 0;
       tot_time = readt+flagt;
-      // while ((bm<NBEAMS) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS)) {
-      while ((bm<NBEAMS) && (p.out_npeaks < MAX_GIANTS)) {
-        //while ((bm<NBEAMS) && (p.out_npeaks < MAX_GIANTS))
+      while ((bm<NBEAMS) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS)) {
+        //while ((bm<NBEAMS) && (p.out_npeaks < MAX_GIANTS)) {
 
-        // spdlog::info("dedisperse");
+        // printf("dedisperse\n");
         begin =        clock();
         dedisperse(&p,bm);
         end = clock();
         dedispt += (float)(end - begin) / CLOCKS_PER_SEC;
 
-        // spdlog::info("begin smooth");
+        // printf("begin smooth\n");
         begin = clock();
         smooth(&p,1);
         end = clock();
         smootht += (float)(end - begin) / CLOCKS_PER_SEC;
 
 
-        // spdlog::info("rest");
+        // printf("rest\n");
         begin = clock();
         find_peaks(&p,bm);
         end = clock();
         peakt += (float)(end - begin) / CLOCKS_PER_SEC;
-        // spdlog::info("END   find peaks bm=%d\n", bm);
+        // printf("END   find peaks bm=%d\n", bm);
 
 
         tot_time = readt+flagt+dedispt+smootht+peakt;
@@ -2586,17 +2381,21 @@ int main(int argc, char *argv[]) {
 
     // look for eof for fil input
     if (p.inp_format==2)
+    {
+      std::cout << "testing feof(fin)=" << feof(fin) << std::endl;
       if (feof(fin)) finished = 1;
+    }
+    std::cout << "Finished: " << finished << std::endl;
 
     // close off dada block
     if (p.inp_format==0)
       ipcio_close_block_read (hdu_in->data_block, bytes_read);
 
-    spdlog::info("Beamstats {} giants {} {}",bm,p.out_npeaks,tot_flags);
+    syslog(LOG_INFO,"Beamstats %d giants %d %g\n",bm,p.out_npeaks,tot_flags);
     tot_flags = 0.;
-    spdlog::info("processed {} s in read {} flag {} dedisp {} smooth {} peak {} output {} [{}]",(p.ntime_dd)*TIME_CONVERSION_FACTOR,readt,flagt,dedispt,smootht,peakt,outputt,readt+flagt+dedispt+smootht+peakt+outputt);
+    syslog(LOG_INFO,"processed %g s in read %g flag %g dedisp %g smooth %g peak %g output %g [%g]\n",(p.ntime_dd)*TIME_CONVERSION_FACTOR,readt,flagt,dedispt,smootht,peakt,outputt,readt+flagt+dedispt+smootht+peakt+outputt);
     // fprintf(stderr, "%g\t%g\t%g\t%g\t%g\t%g\t%g\t%g\n",(p.ntime_dd)*TIME_CONVERSION_FACTOR,readt,flagt,dedispt,smootht,peakt,outputt,readt+flagt+dedispt+smootht+peakt+outputt);
-    spdlog::info("Flagging: {} {} {} {} {} {} {} {} ",p.t1,p.t2,p.t3,p.t4,p.t5,p.t6,p.t7,p.t8);
+    syslog(LOG_INFO,"Flagging: %g %g %g %g %g %g %g %g\n",p.t1,p.t2,p.t3,p.t4,p.t5,p.t6,p.t7,p.t8);
     readt = 0.;
     flagt = 0.;
     dedispt = 0.;

@@ -40,6 +40,7 @@ include(CTest)
 find_package(CUDAToolkit REQUIRED)
 find_package(DEDISP REQUIRED)
 find_package(PkgConfig)
+find_package(spdlog)
 
 pkg_check_modules(SIGPROC sigproc)
 pkg_check_modules(PSRDADA REQUIRED psrdada)

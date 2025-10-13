@@ -48,6 +48,7 @@
 #include <cublas_v2.h>
 
 #include <cstdio>
+#include <spdlog/spdlog.h>
 
 //using namespace std;
 
@@ -102,13 +103,13 @@ void initialize(FILE *fconf, pinfo * p) {
       if (strcmp(c2,"FILE")==0) p->inp_format=1;
       if (strcmp(c2,"FILTERBANK")==0) p->inp_format=2;
       if (strcmp(c2,"CANDIDATE")==0) p->inp_format=3;
-      printf("Using input format %d\n",p->inp_format);
+      spdlog::info("Using input format {}",p->inp_format);
     }
     if (strcmp(c1,"OUTPUT")==0) {
       if (strcmp(c2,"FILE")==0) p->out_format=0;
       if (strcmp(c2,"SOCKET")==0) p->out_format=1;
       if (strcmp(c2,"BOTH")==0) p->out_format=2;
-      printf("Using output format %d\n",p->out_format);
+      spdlog::info("Using output format {}",p->out_format);
     }
     if (strcmp(c1,"HOST")==0) {
       p->coincidencer_host = c2;
@@ -135,12 +136,12 @@ void initialize(FILE *fconf, pinfo * p) {
 
     if (strcmp(c1,"INPUT_PATH")==0) {
       strcpy(p->inp_path,c2);
-      printf("Input path: %s\n",p->inp_path);
+      spdlog::info("Input path: {}",p->inp_path);
     }
 
     if (strcmp(c1,"DADA_OUT")==0) {
       strcpy(p->dada_out,c2);
-      printf("DADA out: %s\n",p->dada_out);
+      spdlog::info("DADA out: {}",p->dada_out);
     }
 
     if (strcmp(c1,"DM_MIN")==0)
@@ -177,7 +178,7 @@ void initialize(FILE *fconf, pinfo * p) {
       for (int i=0;i<p->nscrunches;i++) {
         read = getline(&line, &len, fconf);
         sscanf(line,"%d %d %f %d",&(p->scrunches[i].tscrunch),&(p->scrunches[i].fscrunch),&(p->scrunches[i].thresh),&(p->scrunches[i].nits));
-        printf("Have a scrunch with %d %d %g %d\n",p->scrunches[i].tscrunch,p->scrunches[i].fscrunch,p->scrunches[i].thresh,p->scrunches[i].nits);
+        spdlog::info("Have a scrunch with {} {} {} {}",p->scrunches[i].tscrunch,p->scrunches[i].fscrunch,p->scrunches[i].thresh,p->scrunches[i].nits);
       }
 
     }
@@ -193,11 +194,11 @@ void initialize(FILE *fconf, pinfo * p) {
     j += 1;
   }
   p->nboxcar=j;
-  printf("Search parameters: DM range %g to %g, WIDTHS %d to %d (%d trials), SNR %g\n",p->minDM,p->maxDM,p->minWidth,p->maxWidth,p->nboxcar,p->snr);
+  spdlog::info("Search parameters: DM range {} to {}, WIDTHS {} to {} ({} trials), SNR {}", p->minDM,p->maxDM,p->minWidth,p->maxWidth,p->nboxcar,p->snr);
   if (p->out_format != 0)
-    printf("Outputting to socket %s:%d\n",p->coincidencer_host.c_str(),p->coincidencer_port);
+    spdlog::info("Outputting to socket {}:{}",p->coincidencer_host.c_str(),p->coincidencer_port);
   if (p->out_format != 1)
-    printf("Outputting to text file %s\n",p->out_path);
+    spdlog::info("Outputting to text file {}",p->out_path);
 
 
   // set up DM plan
@@ -220,7 +221,6 @@ void initialize(FILE *fconf, pinfo * p) {
     p->ntime_out = p->gulp;
   }
 
-  printf("NBEAMS=%d NCHAN=%d NTIME=%d NBATCH=%d\n", NBEAMS, NCHAN, p->NTIME, NBATCH);
   // allocate everything
 
   p->h_flagSpec = (float *)malloc(sizeof(float)*NCHAN*NBATCH);
@@ -248,7 +248,7 @@ void initialize(FILE *fconf, pinfo * p) {
   checkCuda(cudaMalloc((void **)(&p->d_ts), sizeof(float) * NBATCH * p->NTIME));
   checkCuda(cudaMalloc((&p->d_bpout), sizeof(float) * NBATCH * NCHAN));
 
-  printf("Will use %d DM trials, output %d times, process %d times with stride %d\n",p->ndms,p->ntime_dd,p->NTIME,p->batch_stride);
+  spdlog::info("Will use {} DM trials, output {} times, process {} times with stride {}",p->ndms,p->ntime_dd,p->NTIME,p->batch_stride);
 
 
   // boxcars
@@ -301,7 +301,7 @@ void initialize(FILE *fconf, pinfo * p) {
 // deallocate everything
 void deallocator(pinfo * p) {
 
-  printf("deallocating pinfo struct\n");
+  spdlog::info("deallocating pinfo struct");
   if (p->data)
     free(p->data);
   p->data = nullptr;
@@ -339,33 +339,33 @@ void deallocator(pinfo * p) {
 
 void help() {
 
-  printf("Usage: pipeline -c <config file>\n");
-  printf("Everything is in the config file. Specific parameters include: \n");
-  printf("INPUT <DADA or FILE or FILTERBANK>\n");
-  printf("INPUT_PATH <dada buffer or full path to filterbank file>\n");
-  printf("DADA_OUT <dada buffer>\n");
-  printf("BEAM_OFFSET <offset in number of beams in input dada buffer>\n");
-  printf("DM_MIN <min DM of search>\n");
-  printf("DM_MAX <max DM of search>\n");
-  printf("WIDTH_MIN <min width of search>\n");
-  printf("WIDTH_MAX <max width of search>\n");
-  printf("SNR <SNR threshold for search>\n");
-  printf("GULP <base gulp size>\n");
-  printf("BEAMFLAGS <full path to beam flags output>\n");
-  printf("SPECFLAGS <full path to spec flags output>\n");
-  printf("OUTPUT <FILE or SOCKET of BOTH>\n");
-  printf("OUTPUTPATH <path to output file>\n");
-  printf("HOST <ip of T2 host>\n");
-  printf("PORT <T2 port>\n");
-  printf("GPU <GPU ID 0 or 1>\n");
-  printf("BEAM0 <first beam in output>\n");
-  printf("OUTPUT_BANDPASS <0 or 1 or 2>\n");
-  printf("SPEC_MAX <max thresh in spec flagging>\n");
-  printf("SPEC_MAX <max thresh in spec flagging>\n");
+  spdlog::info("Usage: pipeline -c <config file>");
+  spdlog::info("Everything is in the config file. Specific parameters include: ");
+  spdlog::info("INPUT <DADA or FILE or FILTERBANK>");
+  spdlog::info("INPUT_PATH <dada buffer or full path to filterbank file>");
+  spdlog::info("DADA_OUT <dada buffer>");
+  spdlog::info("BEAM_OFFSET <offset in number of beams in input dada buffer>");
+  spdlog::info("DM_MIN <min DM of search>");
+  spdlog::info("DM_MAX <max DM of search>");
+  spdlog::info("WIDTH_MIN <min width of search>");
+  spdlog::info("WIDTH_MAX <max width of search>");
+  spdlog::info("SNR <SNR threshold for search>");
+  spdlog::info("GULP <base gulp size>");
+  spdlog::info("BEAMFLAGS <full path to beam flags output>");
+  spdlog::info("SPECFLAGS <full path to spec flags output>");
+  spdlog::info("OUTPUT <FILE or SOCKET of BOTH>");
+  spdlog::info("OUTPUTPATH <path to output file>");
+  spdlog::info("HOST <ip of T2 host>");
+  spdlog::info("PORT <T2 port>");
+  spdlog::info("GPU <GPU ID 0 or 1>");
+  spdlog::info("BEAM0 <first beam in output>");
+  spdlog::info("OUTPUT_BANDPASS <0 or 1 or 2>");
+  spdlog::info("SPEC_MAX <max thresh in spec flagging>");
+  spdlog::info("SPEC_MAX <max thresh in spec flagging>");
 
-  printf("SCRUNCH <number of scrunches>\n");
-  printf("<time scrunch> <frequency scrunch> <flagging threshold> <number of iterations>\n");
-  printf("repeat the above as many times as you like for different parameters\n");
+  spdlog::info("SCRUNCH <number of scrunches>");
+  spdlog::info("<time scrunch> <frequency scrunch> <flagging threshold> <number of iterations>");
+  spdlog::info("repeat the above as many times as you like for different parameters");
 
 }
 
@@ -392,7 +392,7 @@ __global__ void generate_randoms(curandState* globalState, float* randoms)
 void measure_thresholds(pinfo *p) {
 
   // generate data
-  printf("THRESHOLD: Generating random values\n");
+  spdlog::info("THRESHOLD: Generating random values");
   int threads = 256;
   int blocks = (NCHAN/256)*p->NTIME / 2;
   int threadCount = blocks * threads;
@@ -405,7 +405,7 @@ void measure_thresholds(pinfo *p) {
   generate_randoms<<<blocks, threads>>>(dev_curand_states, randomValues);
 
   // prepare for dedispersion
-  printf("THRESHOLD: dedisperse and smooth\n");
+  spdlog::info("THRESHOLD: dedisperse and smooth");
   NppiSize preROI = {NCHAN,p->NTIME};
   cudaMemcpy(p->dataFT,randomValues,4*N,cudaMemcpyDeviceToDevice);
   nppiScale_32f8u_C1R(p->dataFT,p->dataFT_step,p->d_datapreT,p->d_datapreT_step,preROI,-4.,10.);
@@ -418,7 +418,7 @@ void measure_thresholds(pinfo *p) {
   smooth(p,0);
 
   // measure stats
-  printf("THRESHOLD: measure stats\n");
+  spdlog::info("THRESHOLD: measure stats");
   Npp64f *pMean, *pStd;
   NppiSize oSizeROI = {p->ntime_dd,p->ndms};
   int nBufferSize;
@@ -437,9 +437,9 @@ void measure_thresholds(pinfo *p) {
   cudaMemcpy(hMean,pMean,sizeof(double)*p->nboxcar,cudaMemcpyDeviceToHost);
   cudaMemcpy(hStd,pStd,sizeof(double)*p->nboxcar,cudaMemcpyDeviceToHost);
 
-  printf("(Boxcar) Mean Std\n");
+  spdlog::info("(Boxcar) Mean Std");
   for (int i=0;i<p->nboxcar;i++)
-    printf("(%d) %g %g\n",i,hMean[i],hStd[i]);
+    spdlog::info("(%d) %g %g\n",i,hMean[i],hStd[i]);
 
   // scale sigmas by 0.95 to accommodate reduction at increased DM due to more co-added data.
 
@@ -560,7 +560,7 @@ int main(int argc, char *argv[]) {
       tflags += (1.*p.NTIME*p.h_flagSpec[i]);
     }
 
-    printf("TOT FLAGS %g\n",tflags);
+    spdlog::info("TOT FLAGS {}", tflags);
 
     exit(1);
 
@@ -591,7 +591,7 @@ int main(int argc, char *argv[]) {
     header_in = ipcbuf_get_next_read (hdu_in->header_block, &header_size);
     ipcbuf_mark_cleared (hdu_in->header_block);
     block_size = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_in->data_block);
-    syslog(LOG_INFO,"Connected to dada buffer\n");
+    syslog(LOG_INFO,"Connected to dada buffer");
 
     sscanf(p.dada_out, "%x", &out_key);
     hdu_out  = dada_hdu_create (log);
@@ -602,7 +602,7 @@ int main(int argc, char *argv[]) {
     memcpy (header_out, header_in, header_size);
     ipcbuf_mark_filled (hdu_out->header_block, header_size);
     block_out = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_out->data_block);
-    syslog(LOG_INFO,"Ready for output buffer\n");
+    syslog(LOG_INFO,"Ready for output buffer");
 
   }
 
@@ -629,7 +629,7 @@ int main(int argc, char *argv[]) {
     syslog(LOG_INFO,"Finished with header (nbytes %d) of input filFile %s\n",nbytes_header,p.inp_path);
   }
 
-  syslog(LOG_INFO,"Starting...\n");
+  syslog(LOG_INFO,"Starting...");
   int samp = 0;
   if (p.inp_format!=1)
     samp = -(p.NTIME-p.gulp) + (int)(p.maxWidth)/2;
@@ -756,31 +756,31 @@ int main(int argc, char *argv[]) {
 
       // loop over beams to dedisperse and search
       // check time, out_npeaks
-      //printf("Looping over beams...\n");
+      //spdlog::info("Looping over beams...");
       bm = 0;
       tot_time = readt+flagt;
       while ((bm<NBEAMS) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS)) {
         //while ((bm<NBEAMS) && (p.out_npeaks < MAX_GIANTS)) {
 
-        // printf("dedisperse\n");
+        // spdlog::info("dedisperse");
         begin =        clock();
         hella::dedisperse(&p,bm);
         end = clock();
         dedispt += (float)(end - begin) / CLOCKS_PER_SEC;
 
-        // printf("begin smooth\n");
+        // spdlog::info("begin smooth");
         begin = clock();
         hella::smooth(&p,1);
         end = clock();
         smootht += (float)(end - begin) / CLOCKS_PER_SEC;
 
 
-        // printf("rest\n");
+        // spdlog::info("rest");
         begin = clock();
         hella::find_peaks(&p,bm);
         end = clock();
         peakt += (float)(end - begin) / CLOCKS_PER_SEC;
-        // printf("END   find peaks bm=%d\n", bm);
+        // spdlog::info("END   find peaks bm=%d\n", bm);
 
 
         tot_time = readt+flagt+dedispt+smootht+peakt;
