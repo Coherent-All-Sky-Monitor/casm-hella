@@ -11,7 +11,7 @@
 #include "hella/peaks.h"
 
 // PSRDADA includes
-// #include "sock.h"
+#include "sock.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -203,7 +203,7 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
     // close socket
     if (m_sock != -1) {
       syslog(LOG_INFO,"closing socket AFTER");
-      sstat = close( m_sock );
+      sstat = ::close( m_sock );
       if (sstat!=0) {
         syslog(LOG_ERR,"Socket exception: could not close socket: %d",sstat);
         return;
