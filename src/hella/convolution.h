@@ -6,6 +6,8 @@
  *
  ***************************************************************************/
 
+#include "hella/definitions.h"
+
 #include <cuda_fp16.h>
 
 #ifndef HELLA_CONVOLUTION_H
@@ -13,8 +15,21 @@
 
 namespace hella
 {
-  //! handler for half-precision boxcar convolution from npp
-  void npp_convolve_handler(half * data, half * output, float scfac, int xw, int yw, int width, int stride);
+  /**
+   * @brief handler for half-precision boxcar convolution from npp
+   *
+   * @note uses h and d scratch
+   *
+   * @param p
+   * @param data
+   * @param output
+   * @param scfac
+   * @param xw
+   * @param yw
+   * @param width
+   * @param stride
+   */
+  void npp_convolve_handler(pinfo_t* p, half * data, half * output, float scfac, int xw, int yw, int width, int stride);
 
 } // namespace hella
 

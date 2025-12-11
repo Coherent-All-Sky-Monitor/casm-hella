@@ -6,99 +6,49 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
 #include "hella/convolution.h"
 #include "hella/definitions.h"
 #include "hella/flagger.h"
 #include "hella/macros.h"
 #include "hella/median_filter.h"
+#include "hella/normalization.h"
 #include "hella/transpose.h"
 
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <spdlog/spdlog.h>
 
 // use anonymous namespace to force internal linkage
 namespace
 {
-  #ifdef ORIGINAL
   // cuda kernel to add number to data
   // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-  __global__ void add_number(half * data, float num, int width, int stride) {
-
-    int bid = blockIdx.x;
-    int tid = threadIdx.x;
-
-    int idx = bid*32+tid;
-    int y = (int)(idx / width);
-    int x = (int)(idx % width);
-    int iidx = y*stride+x;
-
-    data[iidx] += __float2half(num);
-  }
-  #else
-  // cuda kernel to add number to data
-  // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-  __global__ void add_number(half * data, float num, int width, int stride)
+  __global__ void add_number(half * data, half num, int width, int stride)
   {
-
-    int bid = blockIdx.x;
-    int tid = threadIdx.x;
-
-    int idx = bid*32+tid;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int y = (int)(idx / width);
     int x = (int)(idx % width);
     int iidx = y*stride+x;
 
-    data[iidx] += __float2half(num);
-  }
-  #endif
-
-
-  // cuda kernel to multiply data by number
-  // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-  __global__ void multiply_by_number(half * data, float num, int width, int stride) {
-
-    int bid = blockIdx.x;
-    int tid = threadIdx.x;
-
-    int idx = bid*32+tid;
-    int y = (int)(idx / width);
-    int x = (int)(idx % width);
-    int iidx = y*stride+x;
-
-    data[iidx] *= __float2half(num);
+    data[iidx] += num;
   }
 
-  // cuda kernel to transpose and scale single beam data for loader
-  // beam is [width, NCHAN], data is [NCHAN, width]
-  // assume breakdown into tiles of 32x32, and run with 32x8 threads per block
-  // launch with dim3 dimBlock(32, 8) and dim3 dimGrid(NCHAN/32, width/32)
-  __global__ void transpose_input(unsigned char * beam, half * data, int width) {
+  __global__ void add_then_multiply_by_number(half * data, half a, half c, int width, int stride)
+  {
+    int isamp = blockIdx.x * blockDim.x + threadIdx.x;
+    if (isamp >= width)
+      return;
 
-    __shared__ half tile[32][33];
-
-    int x = blockIdx.x * 32 + threadIdx.x;
-    int y = blockIdx.y * 32 + threadIdx.y;
-    int mywidth = gridDim.x * 32;
-
-    for (int j = 0; j < 32; j += 8)
-      tile[threadIdx.y+j][threadIdx.x] = __float2half((float)(beam[(y+j)*mywidth + x]));
-
-    __syncthreads();
-
-    x = blockIdx.y * 32 + threadIdx.x;  // transpose block offset
-    y = blockIdx.x * 32 + threadIdx.y;
-    mywidth = gridDim.y * 32;
-
-    for (int j = 0; j < 32; j += 8)
-      data[(y+j)*mywidth + x] = tile[threadIdx.x][threadIdx.y + j];
-
+    int idx = (blockIdx.y * stride) + isamp;
+    data[idx] = (data[idx] + a) * c;
   }
 
   // kernel to calculate bandpass
   // launch with NCHAN*NBATCH blocks of 256 threads
   // will ignore last (width % 256) times
-  __global__ void calc_bandpass(half * data, float * bandpass, int width, int stride) {
-
+  __global__ void calc_bandpass(half * data, float * bandpass, int width, int stride)
+  {
     int bid = blockIdx.x;
     int tid = threadIdx.x;
 
@@ -128,7 +78,37 @@ namespace
     __syncthreads();
 
     if (tid==0) bandpass[bid] = __half2float(psum[0]);
+  }
 
+  // in each block, warps will compute the bandpass for a single channel
+  // each block will write out 256/32 channels
+  // grid handles the rest
+  __global__ void calc_bandpass_new(const __restrict__ half* input_data, float * bandpass, int width, int stride)
+  {
+    const unsigned warp_idx = threadIdx.x & 0x1F; // % 32;
+    const unsigned warp_num = threadIdx.x / warpSize;
+    const unsigned channelbeam = (blockIdx.x * 8) + warp_num;
+    unsigned idx = (channelbeam * stride) + warp_idx;
+
+    const int npartials = width / 32; // number partial sums
+    float sum = 0;
+    for (unsigned i=0; i<npartials; i++)
+    {
+      const float raw = __half2float(input_data[idx]);
+      idx += warpSize;
+      sum += raw;
+    }
+
+    // warp level reduction
+    for (int offset = 16; offset > 0; offset /= 2)
+    {
+      sum += __shfl_down_sync(0xffffffff, sum, offset);
+    }
+
+    if (warp_idx == 0)
+    {
+      bandpass[channelbeam] = sum / float(width);
+    }
   }
 
   // add bandpasses
@@ -161,7 +141,20 @@ namespace
 
     if (ch>=flag1 && ch<flag2)
       data[iidx] = repval;
+  }
 
+  __global__ void replace_data_and_add_bandpass(half * data, const float * bp, int width, int stride, float t1, float t2)
+  {
+    const int ibeamchan = (blockIdx.y * blockDim.y) + threadIdx.y;
+    const float bp_val = bp[ibeamchan];
+    const int idx = ibeamchan * stride + (blockIdx.x * blockDim.x) + threadIdx.x;
+    if (bp_val < t1 || bp_val > t2)
+    {
+      data[idx] = __half(1);
+    }
+    else {
+      data[idx] += __half(1);
+    }
   }
 
   // cuda kernel to find data above threshold and add into mask
@@ -183,162 +176,162 @@ namespace
   }
 
   // cuda kernel to divide data by bandpass
-  // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-  __global__ void divide_by_bp(half * data, float * bp, int width, int stride) {
-
-    int bid = blockIdx.x;
-    int tid = threadIdx.x;
-
-    int idx = bid*32+tid;
-    int y = (int)(idx / width);
-    int x = (int)(idx % width);
-    int iidx = y*stride+x;
-
-    data[iidx] /= __float2half(bp[y]);
-  }
-
-  // cuda kernel to replace masked values
-  // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-  __global__ void replace_data_bandpass(half * data, float * bp, float repval, int width, int stride, float t1, float t2)
+  // run with NBATCH*NCHAN*width/64 blocks of 64 threads
+  __global__ void divide_by_bp(half * data, float * bandpass, int width, int stride)
   {
     int bid = blockIdx.x;
     int tid = threadIdx.x;
 
-    int idx = bid*32+tid;
+    int idx = bid*blockDim.x+tid;
     int y = (int)(idx / width);
     int x = (int)(idx % width);
     int iidx = y*stride+x;
 
-    if (bp[y]<t1 || bp[y]>t2)
-      data[iidx] = repval;
+    data[iidx] /= __float2half(bandpass[y]);
   }
 
 } // namespace anonymous
 
-void hella::normalize_data(half * data, int width, int stride)
+void hella::normalize_data(pinfo_t* p, half * data, int width, int stride)
 {
-  float stdDev = calculate_stddev(data,width,NBATCH*NCHAN,stride);
+  // note: uses h and d scratch
+  float stdDev = hella::calculate_stddev(p,data,width,NBATCH*NCHAN, stride);
 
-  add_number<<<NBATCH*NCHAN*width/32,32>>>(data,-1.,width,stride);
+  int nt = 512;
+  half c = __float2half(-1);
+  half m = __float2half(1.f/stdDev);
 
-  multiply_by_number<<<NBATCH*NCHAN*width/32,32>>>(data,1./stdDev,width,stride);
+  dim3 gridDim(width/nt, NBATCH*NCHAN, 1);
+  if (width % nt != 0)
+    gridDim.x++;
 
-  cudaDeviceSynchronize();
+  add_then_multiply_by_number<<<gridDim,nt>>>(data,c,m,width,stride);
+  checkCuda(cudaDeviceSynchronize());
 }
 
 float hella::bandpass_flag(pinfo * p, half * data)
 {
-  // bandpass correct
-  float mn_bp = bandpass_correct(data,p->NTIME, p->batch_stride);
+  // bandpass correct [uses h and d scratch]
+  float mn_bp = bandpass_correct(p, data,p->NTIME, p->batch_stride);
 
-  // normalize data
-  normalize_data(data,p->NTIME, p->batch_stride);
+  // normalize data [uses h and d_scratch]
+  normalize_data(p, data, p->NTIME, p->batch_stride);
 
   // calculate bandpass
-  calc_bandpass<<<NCHAN*NBATCH,256>>>(data, p->d_bpout, p->NTIME, p->batch_stride);
+  const size_t bp_size = sizeof(float) * NBATCH * NCHAN;
+  hella::lock_d_scratch(p, bp_size);
+  auto bandpass = reinterpret_cast<float*>(p->d_scratch);
+  calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(data, bandpass, p->NTIME, p->batch_stride);
 
-  // flag data
-  replace_data_bandpass<<<NBATCH*NCHAN*p->NTIME/32,32>>>(data, p->d_bpout, 0., p->NTIME, p->batch_stride, p->spec_min, p->spec_max);
-
-  // finish up
-  add_number<<<NBATCH*NCHAN*p->NTIME/32,32>>>(data,1.,p->NTIME, p->batch_stride);
+  dim3 blockDim(32 ,16 ,1);
+  dim3 gridDim(p->NTIME/blockDim.x, NBATCH*NCHAN/blockDim.y, 1);
+  if (p->NTIME % blockDim.x != 0)
+    gridDim.x++;
+  replace_data_and_add_bandpass<<<gridDim,blockDim>>>(data, bandpass, p->NTIME, p->batch_stride, p->spec_min, p->spec_max);
+  hella::unlock_d_scratch(p);
 
   return mn_bp;
 }
 
-float hella::bandpass_correct(half * data, int width, int stride) {
+float hella::bandpass_correct(pinfo_t* p, half * input_data, int width, int stride)
+{
+  const size_t nval = NBATCH * NCHAN;
+  const size_t bp_size = sizeof(float) * nval;
+  hella::lock_d_scratch(p, bp_size);
 
   // allocate bandpass
-  float * d_bandpass{nullptr};
-  checkCuda(cudaMalloc(&d_bandpass, NBATCH * NCHAN * sizeof(float)));
+  auto bandpass = reinterpret_cast<float *>(p->d_scratch);
 
   // calculate bandpass
-  calc_bandpass<<<NCHAN*NBATCH,256>>>(data, d_bandpass, width, stride);
+  calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(input_data, bandpass, width, stride);
 
   checkCuda(cudaDeviceSynchronize());
 
-  // median filter bandpass
-  float mn_bp = med_filter_bandpass(d_bandpass);
+  // median filter bandpass [uses h_scratch]
+  float mn_bp = med_filter_bandpass(p, bandpass);
 
   // correct bandpass in data
-  divide_by_bp<<<NBATCH*NCHAN*width/32,32>>>(data,d_bandpass,width,stride);
+  const unsigned nt = 512;
+  divide_by_bp<<<NBATCH*NCHAN*width/nt,nt>>>(input_data,bandpass,width,stride);
 
   checkCuda(cudaDeviceSynchronize());
-  checkCuda(cudaFree(d_bandpass));
+  hella::unlock_d_scratch(p);
 
   return mn_bp;
 }
 
 float hella::apply_scrunch(
-  pinfo * p, half * data, half * mask, half * d_smooth, float * d_ts,
+  pinfo_t * p, half * data, half * mask, half * d_smooth, float * d_ts,
   int width, int stride, int tscrunch, int fscrunch, float thresh,
   int flag, int ts, float * d_flagSpec, int flag1, int flag2)
 {
+  float begin{}, end{};
 
-  float begin, end;
-  float * d_mask;
-  checkCuda(cudaMalloc(&d_mask, NBATCH * NCHAN * sizeof(float)));
+  const size_t mask_nval = NBATCH * NCHAN;
+  const size_t mask_size = mask_nval * sizeof(float);
 
   // bandpass
-  //printf("bandpass\n");
   begin = clock();
-  float mn_bp = bandpass_correct(data,width,stride);
+  float mn_bp = bandpass_correct(p,data,width,stride);
   checkCuda(cudaDeviceSynchronize());
   end = clock();
-  p->t1 += (float)(end - begin) / CLOCKS_PER_SEC;
+  p->t1 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
   // baseline
-  //printf("baseline\n");
   if (ts==1) {
     begin = clock();
     ts_correct(data,d_ts,width,stride);
     end = clock();
-    p->t2 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t2 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
   }
 
   // normalize
-  //printf("normalize\n");
   begin = clock();
-  normalize_data(data,width,stride);
+
+  // uses h and d scratch
+  normalize_data(p, data,width,stride);
   end = clock();
-  p->t3 += (float)(end - begin) / CLOCKS_PER_SEC;
+  p->t3 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
   if (flag==1) {
 
     // derive smoothed data
-    //printf("smooth\n");
     begin = clock();
     //smooth_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
-    hella::npp_convolve_handler(data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
+
+    // uses h and d scratch
+    hella::npp_convolve_handler(p, data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
-    p->t4 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t4 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // threshold data
-    //printf("threshold\n");
     begin = clock();
     checkCuda(cudaMemset(mask,0,NBATCH*NCHAN*stride*sizeof(half)));
     threshold_data<<<NBATCH*NCHAN*width/32,32>>>(d_smooth,mask,thresh/sqrt(1.*tscrunch*fscrunch),width,stride);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
-    p->t5 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t5 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // replace data after growing mask
-    //printf("replace\n");
     begin = clock();
     //smooth_data<<<NBATCH*NCHAN*width/32,32>>>(mask, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
-    npp_convolve_handler(mask, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
+
+    // uses h and d scratch
+    npp_convolve_handler(p, mask, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
+
+    hella::lock_d_scratch(p, mask_size);
+    auto d_mask = reinterpret_cast<float*>(p->d_scratch);
     replace_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, 0., width, stride, flag1, flag2);
     add_number<<<NBATCH*NCHAN*width/32,32>>>(data,1.,width,stride);
     calc_bandpass<<<NCHAN*NBATCH,256>>>(d_smooth, d_mask, width, stride);
-    add_bandpass<<<NCHAN*NBATCH/32,32>>>(d_mask,d_flagSpec);
+    add_bandpass<<<NCHAN*NBATCH/32,32>>>(d_mask, d_flagSpec);
+    hella::unlock_d_scratch(p);
+
     checkCuda(cudaDeviceSynchronize());
     end = clock();
-    p->t6 += (float)(end - begin) / CLOCKS_PER_SEC;
-
+    p->t6 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
   }
-
-  checkCuda(cudaFree(d_mask));
 
   return mn_bp;
 }
@@ -349,94 +342,93 @@ float hella::apply_scrunch(
 // unload the batch
 void hella::fast_flagger(pinfo * p)
 {
-
-  float begin, end;
+  float begin{}, end{}, tmp{};
 
   // setup
-  int nBatches = (int)(NBEAMS / NBATCH);
+  int nBatches = static_cast<int>(NBEAMS / NBATCH);
   checkCuda(cudaMemset(p->d_flagSpec,0,4*NBATCH*NCHAN));
-  syslog(LOG_INFO,"have nbatches %d",nBatches);
-  float mn_bp[nBatches], tmp;
+  spdlog::debug("have nbatches {}", nBatches);
+  std::vector<float> mn_bp;
+  mn_bp.resize(nBatches, 0);
 
   // output bandpass
   FILE *fout{nullptr};
   float *h_bpout{nullptr};
   char fnam[200];
-  if (p->output_bandpass>0) {
+  if (p->output_bandpass>0)
+  {
     h_bpout = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
     sprintf(fnam,"/home/ubuntu/data/bpout_%d.tmp",p->output_bandpass);
     fout=fopen(fnam,"w");
   }
 
-  //printf("fast_flagger ");
-
   // loop over batches
-  for (uint64_t batch = 0; batch < nBatches; batch++) {
-
+  for (uint64_t batch = 0; batch < nBatches; batch++)
+  {
     // load a batch
     //printf("transpose input %d of %d\n",batch+1,nBatches);
     begin = clock();
-    transpose_input_handler(p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
+    transpose_input_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
     end = clock();
-    p->t7 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // output init bandpass
-    if (p->output_bandpass>0) {
+    if (p->output_bandpass>0)
+    {
       begin = clock();
-      calc_bandpass<<<NCHAN*NBATCH,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
+      calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
       checkCuda(cudaMemcpy(h_bpout,p->d_bpout,NBATCH*NCHAN*4,cudaMemcpyDeviceToHost));
       for (int i=0;i<NBATCH*NCHAN;i++)
         fprintf(fout,"%g\n",h_bpout[i]);
       end = clock();
-      p->t8 += (float)(end - begin) / CLOCKS_PER_SEC;
+      p->t8 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
     }
 
-    // bandpass flag / correct
+    // bandpass flag / correct [uses h and d scratch]
     mn_bp[batch] = bandpass_flag(p,p->batch);
 
     // loop over scrunches
-    for (int scrnch=0;scrnch<p->nscrunches;scrnch++) {
-      //printf("scrunch %d...",scrnch);
+    for (int scrnch=0;scrnch<p->nscrunches;scrnch++)
+    {
       tmp = apply_scrunch(p, p->batch, p->mask, p->d_smooth, p->d_ts, p->NTIME, p->batch_stride, p->scrunches[scrnch].tscrunch,p->scrunches[scrnch].fscrunch, p->scrunches[scrnch].thresh,1,0,p->d_flagSpec,p->flag1,p->flag2);
       checkCuda(cudaDeviceSynchronize());
     }
     tmp = apply_scrunch(p, p->batch, p->mask, p->d_smooth, p->d_ts, p->NTIME, p->batch_stride, 8, 8, 100., 0, 1, p->d_flagSpec,p->flag1,p->flag2);
-    //    printf("\n");
 
     checkCuda(cudaDeviceSynchronize());
 
     // output final bandpass
-    if (p->output_bandpass>0) {
+    if (p->output_bandpass>0)
+    {
       begin = clock();
       calc_bandpass<<<NCHAN*NBATCH,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
       cudaMemcpy(h_bpout,p->d_bpout,NBATCH*NCHAN*4,cudaMemcpyDeviceToHost);
       for (int i=0;i<NBATCH*NCHAN;i++)
         fprintf(fout,"%g\n",h_bpout[i]);
       end = clock();
-      p->t8 += (float)(end - begin) / CLOCKS_PER_SEC;
+      p->t8 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
     }
 
     // unload the batch
     begin = clock();
-    transpose_output_handler(p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
+    transpose_output_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
     cudaMemcpy(p->h_flagSpec,p->d_flagSpec,4*NBATCH*NCHAN,cudaMemcpyDeviceToHost);
     end = clock();
-    p->t7 += (float)(end - begin) / CLOCKS_PER_SEC;
-
-    //printf("done\n");
-    //printf("%g ",mn_bp);
-
+    p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
   }
-  //printf("\n");
 
-  syslog(LOG_INFO,"fast_flagger %g %g %g %g",mn_bp[0],mn_bp[1],mn_bp[2],mn_bp[3]);
+  std::ostringstream oss;
+  for (unsigned i=0; i<nBatches; i++)
+  {
+    oss << " " << mn_bp[i];
+  }
+  spdlog::debug("fastflagger {}", oss.str());
 
-  if (p->output_bandpass>0) {
+  if (p->output_bandpass>0)
+  {
     sprintf(fnam,"mv /home/ubuntu/data/bpout_%d.tmp /home/ubuntu/data/bpout_%d.out",p->output_bandpass,p->output_bandpass);
     system(fnam);
     fclose(fout);
     free(h_bpout);
   }
-
 }
-

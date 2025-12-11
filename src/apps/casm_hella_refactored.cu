@@ -6,7 +6,9 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
 #include "hella/dada.h"
+#include "hella/definitions.h"
 #include "hella/dedisperse.h"
 #include "hella/flagger.h"
 #include "hella/peaks.h"
@@ -200,8 +202,8 @@ void initialize(FILE *fconf, pinfo * p) {
   if (p->out_format != 1)
     spdlog::info("Outputting to text file {}",p->out_path);
 
-
   // set up DM plan
+  spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   // generate DM list
   dedisp_generate_dm_list(p->dedispersion_plan,p->minDM,p->maxDM,40,TOL);
@@ -219,25 +221,39 @@ void initialize(FILE *fconf, pinfo * p) {
     p->ntime_dedisp = oo-dedisp_get_max_delay(p->dedispersion_plan);
     p->ntime_dd = p->gulp + p->maxWidth;
     p->ntime_out = p->gulp;
+    spdlog::info("dedisp_get_max_delay(p->dedispersion_plan)={}", dedisp_get_max_delay(p->dedispersion_plan));
   }
 
-  // allocate everything
+  spdlog::info("sizes NCHAN={} NBATCH={} p->NTIME={} p->gulp={} NBEAMS={} ndms={} ntime_dedisp={} ntime_dd={}",
+   NCHAN, NBATCH, p->NTIME, p->gulp, NBEAMS, p->ndms, p->ntime_dedisp, p->ntime_dd);
 
-  p->h_flagSpec = (float *)malloc(sizeof(float)*NCHAN*NBATCH);
-  cudaMalloc((void **)(&p->d_flagSpec), sizeof(float)*NCHAN*NBATCH);
-  p->rewinds = (unsigned char *)malloc(sizeof(unsigned char)*NCHAN*(p->NTIME-p->gulp)*NBEAMS);
-  memset(p->rewinds,0,NCHAN*(p->NTIME-p->gulp)*NBEAMS);
-  p->data = (unsigned char *)malloc(sizeof(unsigned char)*NBEAMS*NCHAN*p->NTIME);
-  //p->h_dedisp = (float *)malloc(sizeof(float)*p->ndms*p->ntime_dd);
-  //p->indata = (unsigned char *)malloc(sizeof(unsigned char)*NCHAN*p->NTIME);
-  p->h_dataF = (float *)malloc(sizeof(float)*NCHAN*p->NTIME);
-  checkCuda(cudaMalloc((void **)(&p->d_dedispPacked), sizeof(float)*p->ndms*p->ntime_dedisp));
-  checkCuda(cudaMalloc((void **)(&p->d_inputPacked), sizeof(unsigned char)*NCHAN*p->NTIME));
-  checkCuda(cudaMalloc((void **)(&p->d_data), sizeof(unsigned char)*NBEAMS*NCHAN*p->NTIME));
-  checkCuda(cudaMallocPitch((void **)(&p->batch), (size_t *)(&p->batch_stride), (unsigned long)(p->NTIME*sizeof(half)), NBATCH*NCHAN));
-  checkCuda(cudaMallocPitch((void **)(&p->mask), (size_t *)(&p->batch_stride), (unsigned long)(p->NTIME*sizeof(half)), NBATCH*NCHAN));
+  // allocate everything
+  const size_t nrewind = static_cast<size_t>(p->NTIME) - p->gulp;
+  const size_t nrewind_chan_beams = nrewind * NCHAN * NBEAMS;
+  const size_t ntime_chan_beams = static_cast<size_t>(p->NTIME) * NCHAN * NBEAMS;
+
+  spdlog::info("alloc p->h_flagSpec");
+  hella::alloc_cpu<float>(&p->h_flagSpec, NCHAN * NBATCH);
+  spdlog::info("alloc p->d_flagSpec");
+  hella::alloc_gpu<float>(&p->d_flagSpec, NCHAN * NBATCH);
+  spdlog::info("alloc p->rewinds nelements={}", nrewind * NCHAN * NBEAMS);
+  hella::alloc_cpu<unsigned char>(&p->rewinds, nrewind * NCHAN * NBEAMS);
+  memset(p->rewinds, 0, nrewind * NCHAN * NBEAMS);
+
+  spdlog::info("alloc p->data p->NTIME={} NBEAMS={} NCHAN={}, nelements={}", p->NTIME, NBEAMS, NCHAN, p->NTIME * NBEAMS * NCHAN);
+  hella::alloc_cpu_host<unsigned char>(&p->data, p->NTIME * NBEAMS * NCHAN);
+
+  hella::alloc_cpu<float>(&p->h_dataF, p->NTIME * NCHAN);
+  hella::alloc_gpu<float>(&p->d_dedispPacked, p->ndms * p->ntime_dedisp);
+  hella::alloc_gpu<unsigned char>(&p->d_inputPacked, p->NTIME * NCHAN);
+  hella::alloc_gpu<unsigned char>(&p->d_data, p->NTIME * NBEAMS * NCHAN);
+
+  hella::alloc_gpu_pitch<half>(&p->batch, reinterpret_cast<size_t*>(&p->batch_stride), p->NTIME, NBATCH * NCHAN);
+  hella::alloc_gpu_pitch<half>(&p->mask, reinterpret_cast<size_t*>(&p->batch_stride), p->NTIME, NBATCH * NCHAN);
   p->batch_stride = p->batch_stride / sizeof(half);
-  checkCuda(cudaMalloc((void **)(&p->d_smooth), sizeof(half) * NBATCH * NCHAN * p->batch_stride));
+  spdlog::info("p->batch_stride={}", p->batch_stride);
+
+  hella::alloc_gpu<half>(&p->d_smooth, p->batch_stride * NBATCH * NCHAN);
   p->d_dedisp = nppiMalloc_32f_C1(p->ntime_dd,p->ndms,&(p->d_dedisp_step));
   if (!p->d_dedisp)
   {
@@ -245,16 +261,15 @@ void initialize(FILE *fconf, pinfo * p) {
     exit(1);
   }
 
-  checkCuda(cudaMalloc((void **)(&p->d_ts), sizeof(float) * NBATCH * p->NTIME));
-  checkCuda(cudaMalloc((&p->d_bpout), sizeof(float) * NBATCH * NCHAN));
+  hella::alloc_gpu<float>(&p->d_ts, p->NTIME * NBATCH);
+  hella::alloc_gpu<float>(&p->d_bpout, NBATCH * NCHAN);
 
   spdlog::info("Will use {} DM trials, output {} times, process {} times with stride {}",p->ndms,p->ntime_dd,p->NTIME,p->batch_stride);
-
 
   // boxcars
   p->boxes = nppiMalloc_32f_C1(p->ntime_out,(p->ndms-2)*p->nboxcar,&(p->boxes_step));
   p->imbox = nppiMalloc_32f_C1(p->ntime_dd,p->ndms,&(p->imbox_step));
-  p->stds = (float *)malloc(sizeof(float)*p->nboxcar);
+  hella::alloc_cpu<float>(&p->stds, p->nboxcar);
   p->mean = BOXCAR_MEAN;
   p->stds[0] = BOXCAR_STD_0;
   p->stds[1] = BOXCAR_STD_1;
@@ -268,18 +283,19 @@ void initialize(FILE *fconf, pinfo * p) {
   p->dmt.resize((p->ndms-2)*p->ntime_out);
   p->output_indices.resize((p->ndms-2)*p->ntime_out);
   p->output_values.resize((p->ndms-2)*p->ntime_out);
-  p->h_idxs = (int *)malloc(sizeof(int)*(p->ndms-2)*p->ntime_out);
-  p->beam = (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->width =  (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->dm_idx = (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->samp = (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->peaks = (float *)malloc(sizeof(float)*MAX_GIANTS);
 
-  p->out_beam = (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->out_samp = (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->out_width =  (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->out_dm_idx = (int *)malloc(sizeof(int)*MAX_GIANTS);
-  p->out_peaks = (float *)malloc(sizeof(float)*MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->h_idxs, (p->ndms-2)*p->ntime_out);
+  hella::alloc_cpu<int>(&p->beam, MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->width, MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->dm_idx, MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->samp, MAX_GIANTS);
+  hella::alloc_cpu<float>(&p->peaks, MAX_GIANTS);
+
+  hella::alloc_cpu<int>(&p->out_beam, MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->out_samp, MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->out_width, MAX_GIANTS);
+  hella::alloc_cpu<int>(&p->out_dm_idx, MAX_GIANTS);
+  hella::alloc_cpu<float>(&p->out_peaks, MAX_GIANTS);
 
   // flag timing
   p->fcpy=0.;
@@ -299,42 +315,31 @@ void initialize(FILE *fconf, pinfo * p) {
 }
 
 // deallocate everything
-void deallocator(pinfo * p) {
-
+void deallocator(pinfo * p)
+{
   spdlog::info("deallocating pinfo struct");
-  if (p->data)
-    free(p->data);
-  p->data = nullptr;
-  if (p->h_dataF)
-    free(p->h_dataF);
-  checkCuda(cudaFree(p->d_bpout));
-  checkCuda(cudaFree(p->d_data));
-  checkCuda(cudaFree(p->batch));
-  checkCuda(cudaFree(p->mask));
-  checkCuda(cudaFree(p->d_dedisp));
-  checkCuda(cudaFree(p->boxes));
-  checkCuda(cudaFree(p->d_dedispPacked));
-  checkCuda(cudaFree(p->d_inputPacked));
+  hella::release_cpu_host(&p->data);
+  hella::release_cpu(&p->h_dataF);
+  hella::release_gpu(&p->d_bpout);
+  hella::release_gpu(&p->d_data);
+  hella::release_gpu(&p->batch);
+  hella::release_gpu(&p->mask);
+  hella::release_gpu(&p->d_dedisp);
+  hella::release_gpu(&p->boxes);
+  hella::release_gpu(&p->d_dedispPacked);
+  hella::release_gpu(&p->d_inputPacked);
   p->dmt.clear();
   p->output_indices.clear();
   p->output_values.clear();
-  if (p->h_idxs)
-    free(p->h_idxs);
-  if (p->beam)
-    free(p->beam);
-  if (p->width)
-    free(p->width);
-  if (p->dm_idx)
-    free(p->dm_idx);
-  if (p->samp)
-    free(p->samp);
-  if (p->peaks)
-    free(p->peaks);
-  if (p->stds)
-    free(p->stds);
-  if (p->rewinds)
-    free(p->rewinds);
 
+  hella::release_cpu(&p->h_idxs);
+  hella::release_cpu(&p->beam);
+  hella::release_cpu(&p->width);
+  hella::release_cpu(&p->dm_idx);
+  hella::release_cpu(&p->samp);
+  hella::release_cpu(&p->peaks);
+  hella::release_cpu(&p->stds);
+  hella::release_cpu(&p->rewinds);
 }
 
 void help() {
@@ -455,8 +460,8 @@ void measure_thresholds(pinfo *p) {
 */
 
 // deals with data IO
-int main(int argc, char *argv[]) {
-
+int main(int argc, char *argv[])
+{
   // parse command line
   FILE *fconf{nullptr};
   int core = -1;
@@ -465,7 +470,7 @@ int main(int argc, char *argv[]) {
     // configuration
     if (strcmp(argv[i],"-c")==0) {
       fconf=fopen(argv[i+1],"r");
-      syslog(LOG_INFO,"Getting config from %s\n",argv[i+1]);
+      spdlog::info("Getting config from {}",argv[i+1]);
       fprintf(stderr, "Getting config from %s\n",argv[i+1]);
     }
     if (strcmp(argv[i],"-i")==0) {
@@ -493,15 +498,17 @@ int main(int argc, char *argv[]) {
   syslog (LOG_NOTICE, "Program started by User %d", getuid ());
 
 
-  syslog(LOG_INFO,"Using GPU ID %d\n",currentDevice);
+  spdlog::info("Using GPU ID {}",currentDevice);
 
   // Bind to cpu core
   if (core >= 0)
+  {
+    spdlog::info("binding to core {}", core);
+    if (dada_bind_thread_to_core(core) < 0)
     {
-      syslog(LOG_INFO,"binding to core %d\n", core);
-      if (dada_bind_thread_to_core(core) < 0)
-        syslog(LOG_ERR,"failed to bind to core %d\n", core);
+      spdlog::error("failed to bind to core {}", core);
     }
+  }
 
 
   // set up pipeline, allocate appropriate mem
@@ -512,7 +519,8 @@ int main(int argc, char *argv[]) {
   FILE *fin{nullptr}, *ftest{nullptr};
 
   // allocate these arrays after initialize is called since p.NTIME can be adjusted there
-  unsigned char * hodata = (unsigned char *)malloc(sizeof(unsigned char)*p.NTIME*NCHAN);
+  unsigned char * hodata{nullptr};
+  hella::alloc_cpu<unsigned char>(&hodata, p.NTIME * NCHAN);
   float * h_ts = (float *)malloc(sizeof(float)*p.NTIME*NBATCH);
 
   if (p.inp_format==3) {
@@ -521,11 +529,12 @@ int main(int argc, char *argv[]) {
     fin=fopen(p.inp_path,"rb");
     int nbytes_header = hella::read_header(fin);
     fclose(fin);
-    char * heade = (char *)malloc(sizeof(char)*nbytes_header);
-    fin=fopen(p.inp_path,"rb");
-    fread(heade, sizeof(char), nbytes_header, fin);
-    free(heade);
-    syslog(LOG_INFO,"Finished with header (nbytes %d) of input filFile %s\n",nbytes_header,p.inp_path);
+    char * header{nullptr};
+    hella::alloc_cpu<char>(&header, nbytes_header);
+    fin = fopen(p.inp_path,"rb");
+    fread(header, sizeof(char), nbytes_header, fin);
+    hella::release_cpu(&header);
+    spdlog::info("Finished with header (nbytes {}) of input filFile {}",nbytes_header,p.inp_path);
 
     // read data
     fread(p.data,sizeof(char),p.NTIME*NCHAN,fin);
@@ -568,7 +577,11 @@ int main(int argc, char *argv[]) {
 
   // begin read of data
   float v;
-  unsigned char * tmpbuf = (unsigned char *)malloc(sizeof(unsigned char)*NCHAN*p.gulp*NBEAMS*2);
+  unsigned char * sigproc_buf{nullptr};
+  if (p.inp_format == 2)
+  {
+    hella::alloc_cpu<unsigned char>(&sigproc_buf, p.gulp * NCHAN * NBEAMS * 2);
+  }
 
   // DADA Header plus Data Unit
   dada_hdu_t* hdu_in = 0;
@@ -591,7 +604,7 @@ int main(int argc, char *argv[]) {
     header_in = ipcbuf_get_next_read (hdu_in->header_block, &header_size);
     ipcbuf_mark_cleared (hdu_in->header_block);
     block_size = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_in->data_block);
-    syslog(LOG_INFO,"Connected to dada buffer");
+    spdlog::info("Connected to dada buffer");
 
     sscanf(p.dada_out, "%x", &out_key);
     hdu_out  = dada_hdu_create (log);
@@ -602,7 +615,7 @@ int main(int argc, char *argv[]) {
     memcpy (header_out, header_in, header_size);
     ipcbuf_mark_filled (hdu_out->header_block, header_size);
     block_out = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_out->data_block);
-    syslog(LOG_INFO,"Ready for output buffer");
+    spdlog::info("Ready for output buffer");
 
   }
 
@@ -622,14 +635,15 @@ int main(int argc, char *argv[]) {
 
     int nbytes_header = hella::read_header(fin);
     fclose(fin);
-    char * heade = (char *)malloc(sizeof(char)*nbytes_header);
+    char *header{nullptr};
+    hella::alloc_cpu<char>(&header, nbytes_header);
     fin=fopen(p.inp_path,"rb");
-    fread(heade, sizeof(char), nbytes_header, fin);
-    free(heade);
-    syslog(LOG_INFO,"Finished with header (nbytes %d) of input filFile %s\n",nbytes_header,p.inp_path);
+    fread(header, sizeof(char), nbytes_header, fin);
+    hella::release_cpu(&header);
+    spdlog::info("Finished with header (nbytes {}) of input filFile {}",nbytes_header,p.inp_path);
   }
 
-  syslog(LOG_INFO,"Starting...");
+  spdlog::info("Starting...");
   int samp = 0;
   if (p.inp_format!=1)
     samp = -(p.NTIME-p.gulp) + (int)(p.maxWidth)/2;
@@ -638,16 +652,17 @@ int main(int argc, char *argv[]) {
   //measure_thresholds(&p);
 
   // set up output
-  FILE *fout, *fspec, *fbeam;
+  // FILE *fout{nullptr}, *fbeam{nullptr};
+  FILE *fspec{nullptr};
   int beamflags[NBEAMS], specflags[NCHAN];
   int bm{0};
 
   // loop over data gulps, figuring out at the end if we're finished
 
   // dada stuff
-  char * block;
-  uint64_t  bytes_read = 0;
-  uint64_t block_id, written;
+  char * block{nullptr};
+  uint64_t bytes_read = 0;
+  uint64_t block_id{0}, written{0};
 
   // timer stuff
   float readt = 0., flagt = 0., dedispt = 0., smootht = 0., peakt = 0., outputt = 0.;
@@ -667,125 +682,125 @@ int main(int argc, char *argv[]) {
       block = ipcio_open_block_read (hdu_in->data_block, &bytes_read, &block_id);
       if (!block)
       {
-              finished = 1;
+        finished = 1;
         continue;
       }
     }
 
     if (p.inp_format==2 && fin != NULL)
-      fread(tmpbuf, sizeof(unsigned char), NBEAMS*p.gulp*NCHAN, fin);
+      fread(sigproc_buf, sizeof(unsigned char), NBEAMS*p.gulp*NCHAN, fin);
 
     // set up logging and reset output
     //for (int i=0;i<NBEAMS;i++) beamflags[i] = 0;
     for (int i=0;i<NCHAN;i++) specflags[i] = 0;
     hella::clear_peaks(&p);
 
-    syslog(LOG_INFO,"Starting gulp %d\n",gulp);
+    spdlog::debug("Starting gulp {}",gulp);
 
     const size_t beam_time_stride = p.NTIME * NCHAN;
     const size_t beam_gulp_stride = p.gulp * NCHAN;
     const size_t beam_rewind_stride = (p.NTIME - p.gulp) * NCHAN;
     // loop over beams to read in data
     begin = clock();
-    for (int bmm=0;bmm<NBEAMS;bmm++) {
-
+    for (int bmm=0;bmm<NBEAMS;bmm++)
+    {
       // get data from reader
 
       // dada input
       if (p.inp_format==0) {
         memcpy(p.data + beam_time_stride*bmm + beam_rewind_stride, block + beam_gulp_stride*(bmm+p.BEAM_OFFSET), beam_gulp_stride);
+        // spdlog::info("bmm={} beam_time_stride={} offset={}", bmm, beam_time_stride, beam_time_stride*bmm);
         memcpy(p.data + beam_time_stride*bmm, p.rewinds + beam_rewind_stride*bmm, beam_rewind_stride);
         memcpy(p.rewinds + beam_rewind_stride*bmm, p.data + beam_time_stride*bmm + beam_gulp_stride, beam_rewind_stride);
       }
 
       // filterbank input
       if (p.inp_format==2) {
-        memcpy(p.data + bmm*p.NTIME*NCHAN + NCHAN*(p.NTIME-p.gulp),tmpbuf+(bmm+p.BEAM_OFFSET)*p.gulp*NCHAN,p.gulp*NCHAN);
-        memcpy(p.data + bmm*p.NTIME*NCHAN, p.rewinds + bmm*NCHAN*(p.NTIME-p.gulp), NCHAN*(p.NTIME-p.gulp));
-        memcpy(p.rewinds + bmm*NCHAN*(p.NTIME-p.gulp), p.data + bmm*p.NTIME*NCHAN + NCHAN*p.gulp, NCHAN*(p.NTIME-p.gulp));
+        memcpy(p.data + beam_time_stride*bmm + beam_rewind_stride,sigproc_buf + beam_gulp_stride*(bmm+p.BEAM_OFFSET), beam_gulp_stride);
+        memcpy(p.data + beam_time_stride*bmm, p.rewinds + beam_rewind_stride*bmm, beam_rewind_stride);
+        memcpy(p.rewinds + beam_rewind_stride*bmm, p.data + beam_time_stride*bmm + beam_gulp_stride, beam_rewind_stride);
       }
-
     }
 
     // copy to device
-    cudaMemcpy(p.d_data,p.data,NBEAMS*p.NTIME*NCHAN,cudaMemcpyHostToDevice);
+    size_t bytes_to_copy = sizeof(unsigned char) * p.NTIME * NBEAMS * NCHAN;
+    checkCuda(cudaMemcpy(p.d_data,p.data,bytes_to_copy,cudaMemcpyHostToDevice));
     end = clock();
-    readt += (float)(end - begin) / CLOCKS_PER_SEC;
+    readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // if gulp is zero
-    if (p.inp_format==0 && gulp==0) {
-
+    if (p.inp_format==0 && gulp==0)
+    {
       for (int bmm=0;bmm<NBEAMS;bmm++)
         checkCuda(cudaMemcpy(p.data + beam_gulp_stride*bmm, p.d_data + beam_time_stride*bmm + beam_rewind_stride, beam_gulp_stride, cudaMemcpyDeviceToHost));
-      written = ipcio_write (hdu_out->data_block, (char *)(p.data), block_out);
+      written = ipcio_write (hdu_out->data_block, reinterpret_cast<char*>(p.data), block_out);
     }
 
-    if ((gulp>0 && p.inp_format!=1) || (p.inp_format==1)) {
-
+    if ((gulp>0 && p.inp_format!=1) || (p.inp_format==1))
+    {
       begin = clock();
+
+      // perform in-place flagging of the input data
       hella::fast_flagger(&p);
 
       // deal with flags
-      for (int j=0;j<NBATCH;j++) {
-        for (int i=0;i<NCHAN;i++) {
+      for (int j=0;j<NBATCH;j++)
+      {
+        for (int i=0;i<NCHAN;i++)
+        {
           //beamflags[bm] += (int)(p.h_flagSpec[j*NCHAN+i]);
           specflags[i] += (int)(1.*p.NTIME*p.h_flagSpec[j*NCHAN+i]);
-                tot_flags += (1.*p.NTIME*p.h_flagSpec[j*NCHAN+i])/FLAG_NORMALIZATION_FACTOR;
+          tot_flags += (1.*p.NTIME*p.h_flagSpec[j*NCHAN+i])/FLAG_NORMALIZATION_FACTOR;
         }
       }
+
       end = clock();
-      flagt += (float)(end - begin) / CLOCKS_PER_SEC;
+      flagt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // write to dada
       begin = clock();
-      if (p.inp_format==0) {
+      if (p.inp_format==0)
+      {
         for (uint64_t bmm=0;bmm<NBEAMS;bmm++)
           checkCuda(cudaMemcpy(p.data + bmm*p.gulp*NCHAN, p.d_data + bmm*p.NTIME*NCHAN + NCHAN*(p.NTIME-p.gulp),p.gulp*NCHAN, cudaMemcpyDeviceToHost));
         written = ipcio_write (hdu_out->data_block, (char *)(p.data), block_out);
       }
       end = clock();
-      readt += (float)(end - begin) / CLOCKS_PER_SEC;
+      readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // write out to disk
       /*cudaMemcpy(hodata,p.d_data,NCHAN*p.NTIME,cudaMemcpyDeviceToHost);
       ftest = fopen("image.out","w");
       for (int i=0;i<NCHAN*p.NTIME;i++)
+      {
         fprintf(ftest,"%f\n",(float)(hodata[i]));
-        fclose(ftest);*/
-
+      }
+      fclose(ftest);*/
 
       // loop over beams to dedisperse and search
       // check time, out_npeaks
-      //spdlog::info("Looping over beams...");
       bm = 0;
       tot_time = readt+flagt;
-      while ((bm<NBEAMS) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS)) {
-        //while ((bm<NBEAMS) && (p.out_npeaks < MAX_GIANTS)) {
 
-        // spdlog::info("dedisperse");
-        begin =        clock();
+      while ((bm<NBEAMS) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS))
+      {
+        begin = clock();
         hella::dedisperse(&p,bm);
         end = clock();
-        dedispt += (float)(end - begin) / CLOCKS_PER_SEC;
+        dedispt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
-        // spdlog::info("begin smooth");
         begin = clock();
         hella::smooth(&p,1);
         end = clock();
-        smootht += (float)(end - begin) / CLOCKS_PER_SEC;
+        smootht += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
-
-        // spdlog::info("rest");
         begin = clock();
         hella::find_peaks(&p,bm);
         end = clock();
-        peakt += (float)(end - begin) / CLOCKS_PER_SEC;
-        // spdlog::info("END   find peaks bm=%d\n", bm);
-
+        peakt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
         tot_time = readt+flagt+dedispt+smootht+peakt;
         bm += 1;
-
       }
 
       begin = clock();
@@ -802,13 +817,12 @@ int main(int argc, char *argv[]) {
       //fclose(fbeam);
       fclose(fspec);
       end = clock();
-      outputt += (float)(end - begin) / CLOCKS_PER_SEC;
+      outputt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // increment socket_count
       socket_count++;
       if (socket_count==SOCKET_CADENCE)
         socket_count=0;
-
     }
 
     // increment sample
@@ -828,11 +842,11 @@ int main(int argc, char *argv[]) {
     if (p.inp_format==0)
       ipcio_close_block_read (hdu_in->data_block, bytes_read);
 
-    syslog(LOG_INFO,"Beamstats %d giants %d %g\n",bm,p.out_npeaks,tot_flags);
+    spdlog::debug("Beamstats {} giants {} {}",bm,p.out_npeaks,tot_flags);
     tot_flags = 0.;
-    syslog(LOG_INFO,"processed %g s in read %g flag %g dedisp %g smooth %g peak %g output %g [%g]\n",(p.ntime_dd)*TIME_CONVERSION_FACTOR,readt,flagt,dedispt,smootht,peakt,outputt,readt+flagt+dedispt+smootht+peakt+outputt);
+    spdlog::info("processed {} s in read {} flag {} dedisp {} smooth {} peak {} output {} [{}]",(p.ntime_dd)*TIME_CONVERSION_FACTOR,readt,flagt,dedispt,smootht,peakt,outputt,readt+flagt+dedispt+smootht+peakt+outputt);
     // fprintf(stderr, "%g\t%g\t%g\t%g\t%g\t%g\t%g\t%g\n",(p.ntime_dd)*TIME_CONVERSION_FACTOR,readt,flagt,dedispt,smootht,peakt,outputt,readt+flagt+dedispt+smootht+peakt+outputt);
-    syslog(LOG_INFO,"Flagging: %g %g %g %g %g %g %g %g\n",p.t1,p.t2,p.t3,p.t4,p.t5,p.t6,p.t7,p.t8);
+    spdlog::debug("Flagging: {} {} {} {} {} {} {} {}",p.t1,p.t2,p.t3,p.t4,p.t5,p.t6,p.t7,p.t8);
     readt = 0.;
     flagt = 0.;
     dedispt = 0.;
@@ -847,13 +861,16 @@ int main(int argc, char *argv[]) {
     p.t6 = 0.;
     p.t7 = 0.;
     p.t8 = 0.;
-
   }
 
   // deallocate stuff
   if (p.inp_format==0)
+  {
     hella::hdu_cleanup(hdu_in, hdu_out);
+  }
+
+  hella::release_cpu(&hodata);
+  hella::release_cpu(&sigproc_buf);
 
   deallocator(&p);
-
 }

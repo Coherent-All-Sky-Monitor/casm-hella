@@ -6,6 +6,7 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
 #include "hella/definitions.h"
 #include "hella/macros.h"
 #include "hella/transpose.h"
@@ -44,8 +45,8 @@ namespace
   // beam is [width, NCHAN], data is [NCHAN, width]
   // assume breakdown into tiles of 32x32, and run with 32x8 threads per block
   // launch with dim3 dimBlock(32, 8) and dim3 dimGrid(width/32, NCHAN/32)
-  __global__ void transpose_output(unsigned char * beam, half * data, int width) {
-
+  __global__ void transpose_output(unsigned char * beam, half * data, int width)
+  {
     __shared__ half tile[32][33];
 
     int x = blockIdx.x * 32 + threadIdx.x;
@@ -63,7 +64,8 @@ namespace
 
     // to saturate uchar8 at -4. and 10.
     float v, scf;
-    for (int j = 0; j < 32; j += 8) {
+    for (int j = 0; j < 32; j += 8)
+    {
       v = __half2float(tile[threadIdx.x][threadIdx.y + j]);
       scf = 255./14.;
       v = scf*(v+4.);
@@ -76,35 +78,66 @@ namespace
 } // namespace anonymous
 
 // TODO: handle_transpose_input and handle_transpose_output to do transpose via memcpy2d from intermediate array
-void hella::transpose_input_handler(unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_input_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
 {
+  spdlog::trace("hella::transpose_input_handler width={} stride={}", width, stride);
+
   dim3 dimBlockIn(32, 8), dimGridIn(NCHAN/32, width/32);
-  half * tmpBuffer{nullptr};
-  checkCuda(cudaMalloc(&tmpBuffer, sizeof(half) * NCHAN * width));
+
+  const size_t required_size = sizeof(half) * NCHAN * width;
+  hella::lock_d_scratch(p, required_size);
 
   // do transpose by beam
-  for (uint64_t bm=0; bm<NBATCH; bm++) {
-    transpose_input<<<dimGridIn,dimBlockIn>>>(d_data+bm*NCHAN*width,tmpBuffer,width);
-    checkCuda(cudaMemcpy2D(batch+bm*NCHAN*stride,stride*sizeof(half),tmpBuffer,width*sizeof(half),width*sizeof(half),NCHAN,cudaMemcpyDeviceToDevice));
+  for (uint64_t bm=0; bm<NBATCH; bm++)
+  {
+    transpose_input<<<dimGridIn,dimBlockIn>>>(
+      d_data+bm*NCHAN*width,
+      reinterpret_cast<half*>(p->d_scratch),
+      width
+    );
+    checkCuda(cudaMemcpy2D(
+      batch+bm*NCHAN*stride,
+      stride*sizeof(half),
+      reinterpret_cast<half*>(p->d_scratch),
+      width*sizeof(half),
+      width*sizeof(half),
+      NCHAN,
+      cudaMemcpyDeviceToDevice
+    ));
   }
+  hella::unlock_d_scratch(p);
 
   checkCuda(cudaDeviceSynchronize());
-  checkCuda(cudaFree(tmpBuffer));
 }
 
-void hella::transpose_output_handler(unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_output_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
 {
   dim3 dimBlockOut(32, 8), dimGridOut(width/32, NCHAN/32);
-  half * tmpBuffer;
-  checkCuda(cudaMalloc(&tmpBuffer, NCHAN * width * sizeof(half)));
+  const size_t nval = NCHAN * width;
+  size_t required_size = sizeof(half) * nval;
+  hella::lock_d_scratch(p, required_size);
+  auto tmp = reinterpret_cast<half*>(p->d_scratch);
 
   // do transpose by beam
   for (int bm=0; bm<NBATCH; bm++)
   {
-    checkCuda(cudaMemcpy2D(tmpBuffer,width*sizeof(half),batch+bm*NCHAN*stride,stride*sizeof(half),width*sizeof(half),NCHAN,cudaMemcpyDeviceToDevice));
-    transpose_output<<<dimGridOut,dimBlockOut>>>(d_data+bm*NCHAN*width,tmpBuffer,width);
+    checkCuda(cudaMemcpy2D(
+      tmp,
+      width*sizeof(half),
+      batch+bm*NCHAN*stride,
+      stride*sizeof(half),
+      width*sizeof(half),
+      NCHAN,
+      cudaMemcpyDeviceToDevice
+    ));
+
+    transpose_output<<<dimGridOut,dimBlockOut>>>(
+      d_data + (bm * nval),
+      tmp,
+      width
+    );
   }
+  hella::unlock_d_scratch(p);
 
   checkCuda(cudaDeviceSynchronize());
-  checkCuda(cudaFree(tmpBuffer));
 }

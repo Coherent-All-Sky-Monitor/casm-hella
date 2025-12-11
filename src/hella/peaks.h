@@ -14,13 +14,13 @@
 namespace hella
 {
   //! to find peaks
-  void find_peaks(pinfo *p, int bm);
+  void find_peaks(pinfo_t *p, int bm);
 
   //! to clear all peaks
-  void clear_peaks(pinfo *p);
+  void clear_peaks(pinfo_t *p);
 
   // output peaks
-  void output_peaks(pinfo *p, int samp, int restart_socket);
+  void output_peaks(pinfo_t *p, int samp, int restart_socket);
 
 } // namespace hella
 

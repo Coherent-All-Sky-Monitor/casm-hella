@@ -10,14 +10,12 @@
 #include "hella/normalization.h"
 #include "hella/peaks.h"
 
-// PSRDADA includes
-#include "sock.h"
-
 #include <cstdlib>
 #include <sstream>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <spdlog/spdlog.h>
 
 #include <thrust/gather.h>
 #include <thrust/iterator/counting_iterator.h>
@@ -30,7 +28,7 @@
 #include <thrust/tuple.h>
 #include <thrust/host_vector.h>
 
-void hella::find_peaks(pinfo *p, int bm)
+void hella::find_peaks(pinfo_t *p, int bm)
 {
   float * dmt_ptr = thrust::raw_pointer_cast(&p->dmt[0]);
   float * d_outputs = thrust::raw_pointer_cast(&p->output_values[0]);
@@ -44,8 +42,9 @@ void hella::find_peaks(pinfo *p, int bm)
     // measure rms - should be 1
     //calculate_stddev_float(float * d_data, int width, int height, int stride)
     if (sm==0) {
-      myStd = hella::calculate_stddev_float(p->boxes+sm*(p->ndms-2)*p->boxes_step/sizeof(float),p->ntime_out,p->ndms-2,p->boxes_step/sizeof(float));
-      if (bm==32) syslog(LOG_INFO,"STDDEV %g",myStd);
+      // note: calculate_stddev_float use h and d scratch
+      myStd = hella::calculate_stddev_float(p, p->boxes+sm*(p->ndms-2)*p->boxes_step/sizeof(float),p->ntime_out,p->ndms-2,p->boxes_step/sizeof(float));
+      if (bm==32) spdlog::debug("STDDEV {}",myStd);
       if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
       if (myStd<STD_DEV_VERY_LOW_THRESHOLD) myStd = 2.;
     }
@@ -57,11 +56,13 @@ void hella::find_peaks(pinfo *p, int bm)
 
       // Find indices and values of points greater than the threshold
       //  thrust::copy(p->dmt.begin(), p->dmt.begin() + 20, std::ostream_iterator<float>(std::cout, " "));
-      thrust::device_vector<int>::iterator end = thrust::copy_if(thrust::make_counting_iterator(0),
-                                                                 thrust::make_counting_iterator(p->ntime_out*(p->ndms-2)),
-                                                                 p->dmt.begin(),
-                                                                 p->output_indices.begin(),
-                                                                 thrust::placeholders::_1 > p->snr*myStd);
+      thrust::device_vector<int>::iterator end = thrust::copy_if(
+        thrust::make_counting_iterator(0),
+        thrust::make_counting_iterator(p->ntime_out*(p->ndms-2)),
+        p->dmt.begin(),
+        p->output_indices.begin(),
+        thrust::placeholders::_1 > p->snr*myStd
+      );
       n_found = end-p->output_indices.begin();
       if (p->npeaks + n_found > MAX_GIANTS)
         n_found = MAX_GIANTS - p->npeaks;
@@ -90,7 +91,7 @@ void hella::find_peaks(pinfo *p, int bm)
     imax = p->out_npeaks+p->npeaks;
   for (int i=p->out_npeaks;i<imax;i++)
   {
-    //printf("%d %d %d\n",p->h_idxs[i],(int)(p->h_idxs[i] % p->ntime_dd),(int)(p->h_idxs[i] / p->ntime_dd));
+    spdlog::trace("find_peaks: {} {} {}", p->h_idxs[i], (int)(p->h_idxs[i] % p->ntime_dd), (int)(p->h_idxs[i] / p->ntime_dd));
     p->out_peaks[i] = p->peaks[i-p->out_npeaks];
     p->out_beam[i] = bm;
     p->out_samp[i] = (int)(p->h_idxs[i-p->out_npeaks] % p->ntime_out);
@@ -102,7 +103,7 @@ void hella::find_peaks(pinfo *p, int bm)
   p->out_npeaks = imax;
 }
 
-void hella::clear_peaks(pinfo *p)
+void hella::clear_peaks(pinfo_t *p)
 {
   memset(p->out_peaks,0,MAX_GIANTS*sizeof(float));
   memset(p->out_beam,0,MAX_GIANTS*sizeof(int));
@@ -112,7 +113,7 @@ void hella::clear_peaks(pinfo *p)
   p->out_npeaks = 0;
 }
 
-void hella::output_peaks(pinfo *p, int samp, int restart_socket)
+void hella::output_peaks(pinfo_t *p, int samp, int restart_socket)
 {
   // if output is file or both
   if (p->out_format != 1) {
@@ -121,14 +122,16 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
     fout=fopen(p->out_path,"a");
     if (!fout)
     {
-      fprintf(stderr, "failed to open out_path=%s\n", p->out_path);
-      exit(EXIT_FAILURE);
+      spdlog::error("failed to open p->out_path={} for appending", p->out_path);
+      throw std::runtime_error("failed to open output file for appending");
     }
 
+    if (p->out_npeaks > 0)
+      spdlog::debug("S/N SAMP TIME WIDTH DM_IDX DM BEAM");
 
     for (int i=0;i<p->out_npeaks;i++) {
       if (i < 10)
-        fprintf(stderr, "%g %d %d %g %d %d %g %d\n",p->out_peaks[i],p->out_samp[i]+samp,p->out_samp[i]+samp,TIME_RESOLUTION*(p->out_samp[i]+samp)/SECONDS_PER_DAY,p->out_width[i],p->out_dm_idx[i],p->DMs[p->out_dm_idx[i]],p->out_beam[i]+p->BEAM0);
+        spdlog::debug("{} {} {} {} {} {} {}",p->out_peaks[i],p->out_samp[i]+samp,TIME_RESOLUTION*(p->out_samp[i]+samp),p->out_width[i],p->out_dm_idx[i],p->DMs[p->out_dm_idx[i]],p->out_beam[i]+p->BEAM0);
 
       // if (p->samp[i]>p->maxWidth/2 && p->samp[i]<=p->ntime_dd-p->maxWidth/2)
       //   fprintf(fout,"A %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,262.144e-6*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]],bm);
@@ -139,7 +142,6 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
     }
     fclose(fout);
   }
-
 
   // if output is socket or both
   if (p->out_format != 0) {
@@ -153,11 +155,11 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
     int m_sock = -1;
 
     // open socket
-    syslog(LOG_INFO,"opening socket");
+    spdlog::info("opening socket");
     memset ( &m_addr, 0, sizeof ( m_addr ) );
     m_sock = socket ( AF_INET, SOCK_STREAM, 0 );
     if (m_sock==-1) {
-      syslog(LOG_ERR,"Socket exception: could not create socket");
+      spdlog::error("Socket exception: could not create socket");
       return;
     }
 
@@ -168,7 +170,7 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
     sstat = connect ( m_sock, ( sockaddr * ) &m_addr, sizeof ( m_addr )) ;
 
     if (sstat!=0) {
-      syslog(LOG_ERR,"Socket exception: could not open socket: %d",sstat);
+      spdlog::error("Socket exception: could not open socket: {}", sstat);
       return;
     }
     else
@@ -190,12 +192,11 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
 
       }
 
-
       std::string s = oss.str();
-      syslog(LOG_INFO,"sending data");
+      spdlog::info("sending data");
       sstat = send ( m_sock, s.c_str(), s.size(), MSG_NOSIGNAL );
       if (sstat==-1) {
-        syslog(LOG_ERR,"Socket exception: could not send cand");
+        spdlog::error("Socket exception: could not send cand");
         return;
       }
 
@@ -206,14 +207,13 @@ void hella::output_peaks(pinfo *p, int samp, int restart_socket)
 
     // close socket
     if (m_sock != -1) {
-      syslog(LOG_INFO,"closing socket AFTER");
+      spdlog::info("closing socket AFTER");
       sstat = ::close( m_sock );
       if (sstat!=0) {
-        syslog(LOG_ERR,"Socket exception: could not close socket: %d",sstat);
+        spdlog::error("Socket exception: could not close socket: {}", sstat);
         return;
       }
       m_sock = -1;
     }
-
   }
 }

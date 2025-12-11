@@ -6,6 +6,8 @@
  *
  ***************************************************************************/
 
+#include "hella/definitions.h"
+
 #include <cuda_fp16.h>
 
 #ifndef HELLA_UNUSED_H
@@ -14,7 +16,7 @@
 namespace hella
 {
   //! function to remove time-frequency baseline
-  void remove_tf_baseline(half * data, int width, int stride);
+  void remove_tf_baseline(pinfo_t* p, half * data, int width, int stride);
 
   //! function to measure ts using cublas calls
   void blas_ts(half * data, half * unity, half * temp_ts, float * ts, int width, int stride);

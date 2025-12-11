@@ -6,6 +6,7 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
 #include "hella/macros.h"
 #include "hella/normalization.h"
 
@@ -82,21 +83,24 @@ namespace {
 
 } // namespace anonymous
 
-float hella::calculate_stddev(half * d_data, int width, int height, int stride)
+float hella::calculate_stddev(pinfo_t *p, half * data, int width, int height, int stride)
 {
-  float *d_sums, *d_qsums;
   int new_width = (int)(512*floor(width/512.));
   int nblocks = new_width*height / 512;
 
-  checkCuda(cudaMalloc(&d_sums, nblocks * sizeof(float)));
-  checkCuda(cudaMalloc(&d_qsums, nblocks * sizeof(float)));
-  sumArray<<<nblocks,512>>>(d_data,d_sums,d_qsums,new_width,height,stride);
+  const size_t sums_size = sizeof(float) * nblocks;
+  hella::lock_d_scratch(p, sums_size * 2);
+  auto d_sums = reinterpret_cast<float*>(p->d_scratch);
+  auto d_qsums = d_sums + nblocks;
 
-  float *sums, *qsums;
-  sums = (float *)malloc(sizeof(float)*nblocks);
-  qsums = (float *)malloc(sizeof(float)*nblocks);
-  checkCuda(cudaMemcpy(sums,d_sums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(qsums,d_qsums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
+  sumArray<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,height,stride);
+
+  hella::lock_h_scratch(p, sums_size * 2);
+  auto sums = reinterpret_cast<float*>(p->h_scratch);
+  auto qsums = sums + nblocks;
+
+  checkCuda(cudaMemcpy(sums,d_sums, sums_size,cudaMemcpyDeviceToHost));
+  checkCuda(cudaMemcpy(qsums,d_qsums, sums_size,cudaMemcpyDeviceToHost));
 
   float sum=0., qsum=0.;
   for (int i=0;i<nblocks;i++) {
@@ -109,29 +113,28 @@ float hella::calculate_stddev(half * d_data, int width, int height, int stride)
   stdDev /= 1.*new_width*height;
   stdDev = sqrt(stdDev);
 
-  checkCuda(cudaFree(d_sums));
-  checkCuda(cudaFree(d_qsums));
-  free(sums);
-  free(qsums);
+  hella::unlock_d_scratch(p);
+  hella::unlock_h_scratch(p);
 
   return stdDev;
 }
 
-float hella::calculate_stddev_float(float * d_data, int width, int height, int stride)
+float hella::calculate_stddev_float(pinfo_t *p, float * data, int width, int height, int stride)
 {
-  float *d_sums{nullptr}, *d_qsums{nullptr};
-  int new_width = (int)(512*floor(width/512.));
+  int new_width = static_cast<int>(512*floor(width/512.));
   int nblocks = new_width*height / 512;
 
-  checkCuda(cudaMalloc(&d_sums, sizeof(float) * nblocks));
-  checkCuda(cudaMalloc(&d_qsums, sizeof(float) * nblocks));
-  sumArrayFloat<<<nblocks,512>>>(d_data,d_sums,d_qsums,new_width,height,stride);
+  const size_t sums_size = sizeof(float) * nblocks;
+  hella::lock_d_scratch(p, sums_size * 2);
+  auto d_sums = reinterpret_cast<float*>(p->d_scratch);
+  auto d_qsums = d_sums + nblocks;
+  sumArrayFloat<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,height,stride);
 
-  float *sums{nullptr}, *qsums{nullptr};
-  sums = (float *)malloc(sizeof(float)*nblocks);
-  qsums = (float *)malloc(sizeof(float)*nblocks);
-  checkCuda(cudaMemcpy(sums,d_sums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(qsums,d_qsums,nblocks*sizeof(float),cudaMemcpyDeviceToHost));
+  hella::lock_h_scratch(p, sums_size * 2);
+  auto sums = reinterpret_cast<float*>(p->h_scratch);
+  auto qsums = sums + nblocks;
+  checkCuda(cudaMemcpy(sums,d_sums,sums_size,cudaMemcpyDeviceToHost));
+  checkCuda(cudaMemcpy(qsums,d_qsums,sums_size,cudaMemcpyDeviceToHost));
 
   float sum=0., qsum=0.;
   for (int i=0;i<nblocks;i++) {
@@ -144,10 +147,8 @@ float hella::calculate_stddev_float(float * d_data, int width, int height, int s
   stdDev /= 1.*new_width*height;
   stdDev = sqrt(stdDev);
 
-  checkCuda(cudaFree(d_sums));
-  checkCuda(cudaFree(d_qsums));
-  free(sums);
-  free(qsums);
+  hella::unlock_d_scratch(p);
+  hella::unlock_h_scratch(p);
 
   return stdDev;
 }

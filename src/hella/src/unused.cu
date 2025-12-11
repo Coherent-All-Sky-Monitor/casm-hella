@@ -80,15 +80,15 @@ namespace
 } // namespace anonymous
 
 // function to remove time-frequency baseline
-void hella::remove_tf_baseline(half * data, int width, int stride) {
+void hella::remove_tf_baseline(pinfo_t *p, half * data, int width, int stride) {
 
   // allocate smooth array
   half * d_smooth;
   checkCuda(cudaMalloc(&d_smooth, NBATCH * NCHAN * stride * sizeof(half)));
 
   // smooth data
-  //smooth_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
-  hella::npp_convolve_handler(data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
+  // smooth_data<<<NBATCH*NCHAN*width/32,32>>>(data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
+  hella::npp_convolve_handler(p, data, d_smooth, (float)(1./NTIME_BOX/NCHAN_BOX), NTIME_BOX, NCHAN_BOX, width, stride);
 
   // divide by smoothed data
   divide_by_array<<<NBATCH*NCHAN*width/32,32>>>(data,d_smooth,width,stride);
@@ -162,7 +162,7 @@ void hella::apply_batch_test(float * input, float * output, int width, int strid
   //measure_ts<<<NBATCH*width,32>>>(batch, d_ts, width, stride);
   ts_correct(batch, d_ts, width, stride);
   end = clock();
-  printf("Time %g\n",(float)(end - begin) / CLOCKS_PER_SEC);
+  printf("Time %g\n",static_cast<float>(end - begin) / CLOCKS_PER_SEC);
 
   cudaMemcpy(output,d_ts,NBATCH * width * sizeof(float),cudaMemcpyDeviceToHost);
 

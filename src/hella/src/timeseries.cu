@@ -6,6 +6,7 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
 #include "hella/definitions.h"
 #include "hella/macros.h"
 #include "hella/median_filter.h"
@@ -15,62 +16,42 @@
 
 namespace
 {
-  // cuda kernel to measure per-beam time baseline
-  // run with NBATCH*width lots of 32 threads
   __global__ void measure_ts(half * data, float * ts, int width, int stride)
   {
-    int bid = blockIdx.x;
-    int tid = threadIdx.x;
-    // int id = bid*32+tid;
-    int iTime = (int)(bid % width);
-    int iBatch = (int)(bid / width);
+    // beam == blockIdx.y
+    // time == blockIdx.x * blockDim.x + threadIdx.x
 
-    int npartials = (int)(NCHAN / 32); // number partial sums
-    half fac = (half)((32.*npartials));
-    __shared__ half cpsum[32];
+    int isamp = blockIdx.x * blockDim.x + threadIdx.x;
+    if (isamp >= width)
+      return;
 
-    // calculate partial sums
-
-    cpsum[tid] = 0.;
-    int idx0 = iBatch*NCHAN*stride + tid*npartials*stride + iTime;
-    for (int i=idx0;i<idx0+npartials*stride;i+=stride)
-      cpsum[tid] += data[i];
-    cpsum[tid] /= fac;
-
-    __syncthreads();
-
-    // sum over shared memory
-    if (tid < 16) { cpsum[tid] += cpsum[tid + 16]; } __syncthreads();
-    if (tid < 8) { cpsum[tid] += cpsum[tid + 8]; } __syncthreads();
-    if (tid < 4) { cpsum[tid] += cpsum[tid + 4]; } __syncthreads();
-    if (tid < 2) { cpsum[tid] += cpsum[tid + 2]; } __syncthreads();
-    if (tid < 1) { cpsum[tid] += cpsum[tid + 1]; } __syncthreads();
-    //if (tid < 32) warpReduce(psum, tid);
-    __syncthreads();
-
-    if (tid==0) ts[bid] = __half2float(cpsum[0]);
+    int idx = (blockIdx.y * NCHAN * stride) + isamp;
+    half sum = 0;
+    for (int ichan=0; ichan<NCHAN; ichan++)
+    {
+      sum += data[idx];
+      idx += stride;
+    }
+    ts[blockIdx.y * width + isamp] = __half2float(sum) / float(NCHAN);
   }
 
-  // cuda kernel to divide data by time series
-  // run with NBATCH*NCHAN*width/32 blocks of 32 threads
-  __global__ void divide_by_ts(half * data, float * ts, int width, int stride, int flag_ts) {
+  __global__ void divide_by_ts(half * data, const float * ts, int width, int stride, int flag_ts)
+  {
+    // beam == blockIdx.y
+    // chan == blockIdx.z
+    // time == blockIdx.x * blockDim.x + threadIdx.x
 
-    int bid = blockIdx.x;
-    int tid = threadIdx.x;
+    int isamp = blockIdx.x * blockDim.x + threadIdx.x;
+    if (isamp >= width)
+      return;
 
-    int idx = bid*32+tid;
-    int y = (int)(idx / width);
-    int x = (int)(idx % width);
-    int b = (int)(y / NCHAN);
-    int tsidx = b*width+x;
-    int iidx = y*stride+x;
+    // common scale factor by which all channels are divided
+    const float facf = ts[blockIdx.y * stride + isamp];
 
-    data[iidx] /= __float2half(ts[tsidx]);
+    const half fac = __float2half(facf);
 
-    if (flag_ts==1) {
-      if (ts[tsidx]>TIME_SERIES_HIGH_THRESHOLD) data[iidx] = __float2half(1.);
-      if (ts[tsidx]<TIME_SERIES_LOW_THRESHOLD) data[iidx] = __float2half(1.);
-    }
+    const int idx = ((blockIdx.y * NCHAN + blockIdx.z) * stride) + isamp;
+    data[idx] = __hdiv(data[idx], fac);
   }
 
 } // namespace anonymous
@@ -78,26 +59,31 @@ namespace
 void hella::ts_correct(half * data, float * d_ts, int width, int stride)
 {
   // calculate ts
-  measure_ts<<<NBATCH*width,32>>>(data, d_ts, width, stride);
+  dim3 blockDim(256, 1, 1);
+  dim3 gridDim(width/blockDim.x, NBATCH, 1);
+  if (width % blockDim.x != 0)
+    gridDim.x++;
+  measure_ts<<<gridDim, blockDim>>>(data, d_ts, width, stride);
 
-  checkCuda(cudaDeviceSynchronize());
-
-  // median filter ts
+  // AJ this was disabled: median filter ts
   // hella::med_filter_ts(d_ts,width);
 
-  // correct ts in data
-  divide_by_ts<<<NBATCH*NCHAN*width/32,32>>>(data,d_ts,width,stride,0);
+  gridDim.z = NCHAN;
+  divide_by_ts<<<gridDim, blockDim>>>(data,d_ts,width,stride,0);
   checkCuda(cudaDeviceSynchronize());
 }
 
-void hella::med_filter_ts(float * d_ts, int width)
+void hella::med_filter_ts(pinfo_t* p, float * d_ts, int width)
 {
-  float * hts = (float *)malloc(sizeof(float)*NBATCH*width);
-  float * mhts = (float *)malloc(sizeof(float)*NBATCH*width);
-  checkCuda(cudaMemcpy(hts,d_ts,sizeof(float)*NBATCH*width,cudaMemcpyDeviceToHost));
-  float mn_ts = hella::median_filter(hts,mhts,NBATCH*width,NTSMED);
-  checkCuda(cudaMemcpy(d_ts,mhts,sizeof(float)*NBATCH*width,cudaMemcpyHostToDevice));
+  const size_t nval = NBATCH * width;
+  const size_t hts_size = sizeof(float) * nval;
+  hella::lock_h_scratch(p, hts_size * 2);
 
-  free(hts);
-  free(mhts);
+  auto hts = reinterpret_cast<float*>(p->h_scratch);
+  auto mhts = hts + nval;
+  checkCuda(cudaMemcpy(hts,d_ts,hts_size,cudaMemcpyDeviceToHost));
+  float mn_ts = hella::median_filter(hts,mhts,nval,NTSMED);
+  checkCuda(cudaMemcpy(d_ts,mhts,hts_size,cudaMemcpyHostToDevice));
+
+  hella::unlock_h_scratch(p);
 }

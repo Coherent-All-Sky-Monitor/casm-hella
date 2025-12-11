@@ -6,6 +6,8 @@
  *
  ***************************************************************************/
 
+#include "hella/definitions.h"
+
 #ifndef HELLA_MEDIAN_FILTER_H
 #define HELLA_MEDIAN_FILTER_H
 
@@ -20,8 +22,15 @@ namespace hella
   //! Function to apply median filter
   float median_filter(float *input, float *output, int size, int windowSize);
 
-  // function to orchestrate host median filtering of bandpass
-  float med_filter_bandpass(float * d_bandpass);
+  /**
+   * @brief Orchestrate host median filtering of bandpass.
+   *
+   * @note uses h_scratch
+   *
+   * @param d_bandpass bandpass in device memory with size NBATCH * NCHAN
+   * @return float mean of the median filtered bandpass
+   */
+  float med_filter_bandpass(pinfo_t* p, float * d_bandpass);
 
 } // namespace hella
 

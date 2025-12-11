@@ -18,25 +18,35 @@ namespace hella
   /**
    * @brief function to normalize data, assume initial mean is 1
    *
-   * @param data
+   * @note uses h and d scratch
+   *
+   * @param input_data
    * @param width
    * @param stride
    */
-  void normalize_data(half * data, int width, int stride);
+  void normalize_data(pinfo_t * p, half * input_data, int width, int stride);
 
-  float calculate_stddev(half * d_data, int width, int height, int stride);
-
-  //! function to implement bandpass flagging on data
+  /**
+   * @brief Function to implement bandpass flagging on data
+   *
+   * @note used h and d scratch
+   *
+   * @param p
+   * @param data
+   * @return float
+   */
   float bandpass_flag(pinfo * p, half * data);
 
-  //! function to bandpass-correct data
-  float bandpass_correct(half * data, int width, int stride);
+  //! function to bandpass-correct data [uses h and d scratch]
+  float bandpass_correct(pinfo_t* p, half * data, int width, int stride);
 
   //! function to ts-correct data
   void ts_correct(half * data, float * d_ts, int width, int stride);
 
   /**
    * @brief Apply a single scrunch to the data
+   *
+   * @note uses h and d scratch
    *
    * @param p
    * @param data

@@ -6,6 +6,7 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
 #include "hella/definitions.h"
 #include "hella/macros.h"
 #include "hella/median_filter.h"
@@ -79,22 +80,28 @@ float hella::median_filter(float *input, float *output, int size, int windowSize
   mn /= 1.*size;
 
   return mn;
-
 }
 
-// function to orchestrate host median filtering of bandpass
-float hella::med_filter_bandpass(float * d_bandpass)
+float hella::med_filter_bandpass(pinfo_t* p, float * d_bandpass)
 {
+  // acquire the host scratch space
+  const size_t nval = NBATCH * NCHAN;
+  const size_t bp_size = sizeof(float) * nval;
+  hella::lock_h_scratch(p, bp_size * 2);
 
-  float * hbp = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
-  float * mhbp = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
-  checkCuda(cudaMemcpy(hbp,d_bandpass,sizeof(float)*NBATCH*NCHAN,cudaMemcpyDeviceToHost));
-  float mn_bp = hella::median_filter(hbp,mhbp,NBATCH*NCHAN,NMEDFILT);
-  checkCuda(cudaMemcpy(d_bandpass,mhbp,sizeof(float)*NBATCH*NCHAN,cudaMemcpyHostToDevice));
+  auto hbp = reinterpret_cast<float*>(p->h_scratch);
+  auto mhbp = hbp + nval;
 
-  free(hbp);
-  free(mhbp);
+  // copy the device bandpass to the host
+  checkCuda(cudaMemcpy(hbp,d_bandpass,bp_size, cudaMemcpyDeviceToHost));
+
+  // median filter the host bandpass with a window of NMEDFILT
+  // AJ: I wonder what happens at the edges of each beam?
+  float mn_bp = hella::median_filter(hbp,mhbp,nval,NMEDFILT);
+
+  // copy the median filtered host bandpass back to the input device bandpass
+  checkCuda(cudaMemcpy(d_bandpass,mhbp,bp_size,cudaMemcpyHostToDevice));
+  hella::unlock_h_scratch(p);
 
   return mn_bp;
-
 }

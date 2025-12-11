@@ -21,6 +21,7 @@ set(private_headers
 
 set(
   sources
+  src/alloc.cpp
   src/convolution.cu
   src/dada.cpp
   src/dedisperse.cpp

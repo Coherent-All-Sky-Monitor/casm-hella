@@ -38,7 +38,7 @@ const int MAXRECV = 500;
 #define NTSMED 7
 #define NBATCH 4
 #define NCHAN 3072
-#define NBEAMS 64
+#define NBEAMS 128
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
@@ -49,8 +49,8 @@ const int MAXRECV = 500;
 #define SOCKET_CADENCE 1
 
 // CASM frequency and timing parameters
-#define FREQ_CHANNEL_WIDTH 0.03075  // 0.03075 MHz
-#define CENTER_FREQ 850.0e6         // 450 MHz in Hz
+#define FREQ_CHANNEL_WIDTH -0.03075  // 0.03075 MHz
+#define CENTER_FREQ 500.0e6         // 450 MHz in Hz
 #define TIME_RESOLUTION 1.0e-3      // 1 ms in seconds
 
 // Other configurable constants
@@ -110,9 +110,9 @@ typedef struct pinfo {
   float spec_min, spec_max; // thresholds for spectrum flagging
 
   // derived params
-  int NTIME; // gulp that includes rewind
-  int rewind; // samples to rewind by
-  int nchan; // number of resampled channels
+  unsigned long NTIME; // gulp that includes rewind
+  unsigned long rewind; // samples to rewind by
+  unsigned long nchan; // number of resampled channels
   int ndms; // number of DM trials
   int ntime_dd; // dedisp number of times
   int ntime_out; // final output number of times
@@ -164,6 +164,14 @@ typedef struct pinfo {
   float fcpy, fprep, fflag, fapply;
   float t1, t2, t3, t4, t5, t6, t7, t8, t9;
 
-} pinfo;
+  void * h_scratch{nullptr};
+  size_t h_scratch_size{0};
+  bool h_scratch_locked{false};
+
+  void * d_scratch{nullptr};
+  size_t d_scratch_size{0};
+  bool d_scratch_locked{false};
+
+} pinfo_t;
 
 #endif // HELLA_DEFINITIONS_H

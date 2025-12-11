@@ -1356,7 +1356,7 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
   float mn_bp = bandpass_correct(data,width,stride);
   checkCuda(cudaDeviceSynchronize());
   end = clock();
-  p->t1 += (float)(end - begin) / CLOCKS_PER_SEC;
+  p->t1 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
   // baseline
   //printf("baseline\n");
@@ -1364,7 +1364,7 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
     begin = clock();
     ts_correct(data,d_ts,width,stride);
     end = clock();
-    p->t2 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t2 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
   }
 
   // normalize
@@ -1372,7 +1372,7 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
   begin = clock();
   normalize_data(data,width,stride);
   end = clock();
-  p->t3 += (float)(end - begin) / CLOCKS_PER_SEC;
+  p->t3 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
   if (flag==1) {
 
@@ -1383,7 +1383,7 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
     npp_convolve_handler(data, d_smooth, 1./tscrunch/fscrunch, tscrunch, fscrunch, width, stride);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
-    p->t4 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t4 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // threshold data
     //printf("threshold\n");
@@ -1392,7 +1392,7 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
     threshold_data<<<NBATCH*NCHAN*width/32,32>>>(d_smooth,mask,thresh/sqrt(1.*tscrunch*fscrunch),width,stride);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
-    p->t5 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t5 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // replace data after growing mask
     //printf("replace\n");
@@ -1405,7 +1405,7 @@ float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float 
     add_bandpass<<<NCHAN*NBATCH/32,32>>>(d_mask,d_flagSpec);
     checkCuda(cudaDeviceSynchronize());
     end = clock();
-    p->t6 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t6 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
   }
 
@@ -1449,7 +1449,7 @@ void fastflagger(pinfo * p) {
     begin = clock();
     transpose_input_handler(p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
     end = clock();
-    p->t7 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // output init bandpass
     if (p->output_bandpass>0) {
@@ -1459,7 +1459,7 @@ void fastflagger(pinfo * p) {
       for (int i=0;i<NBATCH*NCHAN;i++)
         fprintf(fout,"%g\n",h_bpout[i]);
       end = clock();
-      p->t8 += (float)(end - begin) / CLOCKS_PER_SEC;
+      p->t8 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
     }
 
     // bandpass flag / correct
@@ -1484,7 +1484,7 @@ void fastflagger(pinfo * p) {
       for (int i=0;i<NBATCH*NCHAN;i++)
         fprintf(fout,"%g\n",h_bpout[i]);
       end = clock();
-      p->t8 += (float)(end - begin) / CLOCKS_PER_SEC;
+      p->t8 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
     }
 
     // unload the batch
@@ -1492,7 +1492,7 @@ void fastflagger(pinfo * p) {
     transpose_output_handler(p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
     cudaMemcpy(p->h_flagSpec,p->d_flagSpec,4*NBATCH*NCHAN,cudaMemcpyDeviceToHost);
     end = clock();
-    p->t7 += (float)(end - begin) / CLOCKS_PER_SEC;
+    p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     //printf("done\n");
     //printf("%g ",mn_bp);
@@ -1568,7 +1568,7 @@ void apply_batch_test(float * input, float * output, int width, int stride) {
   //measure_ts<<<NBATCH*width,32>>>(batch, d_ts, width, stride);
   ts_correct(batch, d_ts, width, stride);
   end = clock();
-  printf("Time %g\n",(float)(end - begin) / CLOCKS_PER_SEC);
+  printf("Time %g\n",static_cast<float>(end - begin) / CLOCKS_PER_SEC);
 
   cudaMemcpy(output,d_ts,NBATCH * width * sizeof(float),cudaMemcpyDeviceToHost);
 
@@ -2270,7 +2270,7 @@ int main(int argc, char *argv[]) {
     // copy to device
     cudaMemcpy(p.d_data,p.data,NBEAMS*p.NTIME*NCHAN,cudaMemcpyHostToDevice);
     end = clock();
-    readt += (float)(end - begin) / CLOCKS_PER_SEC;
+    readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
     // if gulp is zero
     if (p.inp_format==0 && gulp==0) {
@@ -2294,7 +2294,7 @@ int main(int argc, char *argv[]) {
         }
       }
       end = clock();
-      flagt += (float)(end - begin) / CLOCKS_PER_SEC;
+      flagt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // write to dada
       begin = clock();
@@ -2304,7 +2304,7 @@ int main(int argc, char *argv[]) {
         written = ipcio_write (hdu_out->data_block, (char *)(p.data), block_out);
       }
       end = clock();
-      readt += (float)(end - begin) / CLOCKS_PER_SEC;
+      readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // write out to disk
       /*cudaMemcpy(hodata,p.d_data,NCHAN*p.NTIME,cudaMemcpyDeviceToHost);
@@ -2326,20 +2326,20 @@ int main(int argc, char *argv[]) {
         begin =        clock();
         dedisperse(&p,bm);
         end = clock();
-        dedispt += (float)(end - begin) / CLOCKS_PER_SEC;
+        dedispt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
         // printf("begin smooth\n");
         begin = clock();
         smooth(&p,1);
         end = clock();
-        smootht += (float)(end - begin) / CLOCKS_PER_SEC;
+        smootht += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
 
         // printf("rest\n");
         begin = clock();
         find_peaks(&p,bm);
         end = clock();
-        peakt += (float)(end - begin) / CLOCKS_PER_SEC;
+        peakt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
         // printf("END   find peaks bm=%d\n", bm);
 
 
@@ -2362,7 +2362,7 @@ int main(int argc, char *argv[]) {
       //fclose(fbeam);
       fclose(fspec);
       end = clock();
-      outputt += (float)(end - begin) / CLOCKS_PER_SEC;
+      outputt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // increment socket_count
       socket_count++;

@@ -2,7 +2,7 @@ INPUT FILTERBANK
 INPUT_PATH /home/ajameson/noise+frb_DM50_3072x0.0305176MHz_fch1_500MHz_8bit.fil
 DADA_OUT eada
 OUTPUT FILE
-OUTPUTPATH /home/ajameson/FourierSpace/sources/casm_hella/test/output.file
+OUTPUTPATH /home/ajameson/FourierSpace/sources/casm-hella/test/output.file
 HOST localhost
 PORT 12345
 BEAM0 0
@@ -11,9 +11,9 @@ SPECFLAGS /home/ajameson/FourierSpace/sources/casm_xengine/hella/spec.flags
 DM_MIN 0
 DM_MAX 100
 WIDTH_MIN 1
-WIDTH_MAX 256
+WIDTH_MAX 128
 SNR 10
-GULP 4096
+GULP 32768
 FLAG1 -1
 FLAG2 -1
 SPEC_MIN -0.05
