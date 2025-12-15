@@ -67,10 +67,10 @@ namespace
     for (int j = 0; j < 32; j += 8)
     {
       v = __half2float(tile[threadIdx.x][threadIdx.y + j]);
-      scf = 255./14.;
-      v = scf*(v+4.);
+      scf = 255.f/14.f;
+      v = scf*(v+4.f);
       if (v<0.) v = 0;
-      if (v>255.) v = 255.;
+      if (v>255.f) v = 255.f;
       beam[(y+j)*mywidth + x] = (unsigned char)(v);
     }
   }

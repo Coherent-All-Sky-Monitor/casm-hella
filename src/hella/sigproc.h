@@ -14,6 +14,14 @@
 namespace hella {
 
   /**
+   * @brief Open a sigproc filename file, read the header and return a file pointer starting at the data
+   *
+   * @param filename sigproc file name to open
+   * @return FILE* pointer to the opened file, read to read data
+   */
+  FILE* open_filterbank_file(const char * filename);
+
+  /**
    * @brief Simple read_header function for filterbank files
    *
    * This is a basic implementation - you may need to enhance it for your specific needs

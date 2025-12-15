@@ -67,6 +67,15 @@ namespace hella
     *allocation = nullptr;
   }
 
+  /**
+   * @brief Alloc device memory with row based alignment requirements.
+   *
+   * @tparam T type of the elements to allocated
+   * @param device_ptr destination for base address of the allocation
+   * @param pitch stride between rows in bytes, likely different to the width to ensure coalescence
+   * @param width number of bytes of data in a row
+   * @param height number of rows
+   */
   template <typename T>
   void alloc_gpu_pitch(T ** device_ptr, size_t * pitch, size_t width, size_t height)
   {

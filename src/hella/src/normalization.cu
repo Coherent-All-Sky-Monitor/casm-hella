@@ -11,6 +11,7 @@
 #include "hella/normalization.h"
 
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 namespace {
 
@@ -25,60 +26,122 @@ namespace {
     sdata[tid] += sdata[tid + 1];
   }
 
-  // kernel to sum array and its squares
-  __global__ void sumArray(half * data, float * sums, float * qsums, int width, int height, int stride)
+  // each block will compute the sums and qsums for a row
+  __global__ void sumArray(const half * data, float * sums, float * qsums, int width, int stride)
   {
-    __shared__ float sdata[512], qdata[512];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*512 + tid;
-    int x = i % width;
-    int y = i / width;
-    int iidx = y*stride+x;
+    unsigned idx = blockIdx.x * stride + threadIdx.x;
+    __shared__ float2 sdata[512];
 
-    sdata[tid] = __half2float(data[iidx]);
-    qdata[tid] = __half2float(data[iidx]*data[iidx]);
+    // each thread computes a stride sum and qsum
+    __half2 s = make_half2(0.0f, 0.0f);
+    for (unsigned i=threadIdx.x; i<width; i+=blockDim.x, idx+=blockDim.x)
+    {
+      const half val = data[idx];
+      s.x += val;
+      s.y += val * val;
+    }
 
+    // assign the stride sum to shared memory, converting to a float
+    sdata[threadIdx.x] = __half22float2(s);
     __syncthreads();
 
-    if (tid < 256) { sdata[tid] += sdata[tid + 256]; } __syncthreads();
-    if (tid < 128) { sdata[tid] += sdata[tid + 128]; } __syncthreads();
-    if (tid < 64) { sdata[tid] += sdata[tid + 64]; } __syncthreads();
-    if (tid < 32) warpReduce(sdata, tid);
-    if (tid < 256) { qdata[tid] += qdata[tid + 256]; } __syncthreads();
-    if (tid < 128) { qdata[tid] += qdata[tid + 128]; } __syncthreads();
-    if (tid < 64) { qdata[tid] += qdata[tid + 64]; } __syncthreads();
-    if (tid < 32) warpReduce(qdata, tid);
+    if (threadIdx.x < 256) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 256].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 256].y;
+    }
+    __syncthreads();
 
-    if (tid == 0) sums[blockIdx.x] = sdata[0];
-    if (tid == 0) qsums[blockIdx.x] = qdata[0];
+    if (threadIdx.x < 128) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 128].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 128].y;
+    }
+    __syncthreads();
+
+    if (threadIdx.x < 64) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 64].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 64].y;
+    }
+    __syncthreads();
+
+    if (threadIdx.x < 32) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 32].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 32].y;
+    }
+    __syncthreads();
+
+    if (threadIdx.x < 32) {
+      // Ensure all threads in the warp are active for __shfl_down_sync
+      unsigned int mask = __activemask();
+      for (int offset = 16; offset > 0; offset >>= 1) {
+        sdata[threadIdx.x].x += __shfl_down_sync(mask, sdata[threadIdx.x].x, offset);
+        sdata[threadIdx.x].y += __shfl_down_sync(mask, sdata[threadIdx.x].y, offset);
+      }
+    }
+
+    if (threadIdx.x == 0)
+    {
+      sums[blockIdx.x] = sdata[threadIdx.x].x;
+      qsums[blockIdx.x] = sdata[threadIdx.x].y;
+    }
   }
 
   // kernel to sum array and its squares
-  __global__ void sumArrayFloat(float * data, float * sums, float * qsums, int width, int height, int stride)
+  __global__ void sumArrayFloat(float * data, float * sums, float * qsums, int width, int stride)
   {
-    __shared__ float sfdata[512], qfdata[512];
-    unsigned int tid = threadIdx.x;
-    unsigned int i = blockIdx.x*512 + tid;
-    int x = i % width;
-    int y = i / width;
-    int iidx = y*stride+x;
+    unsigned idx = blockIdx.x * stride + threadIdx.x;
+    __shared__ float2 sdata[512];
 
-    sfdata[tid] = data[iidx];
-    qfdata[tid] = data[iidx]*data[iidx];
+    // each thread computes a stride sum and qsum
+    float2 s = make_float2(0.0f, 0.0f);
+    for (unsigned i=threadIdx.x; i<width; i+=blockDim.x, idx+=blockDim.x)
+    {
+      const float val = data[idx];
+      s.x += val;
+      s.y += val * val;
+    }
 
+    // assign the stride sum to shared memory, converting to a float
+    sdata[threadIdx.x] = s;
     __syncthreads();
 
-    if (tid < 256) { sfdata[tid] += sfdata[tid + 256]; } __syncthreads();
-    if (tid < 128) { sfdata[tid] += sfdata[tid + 128]; } __syncthreads();
-    if (tid < 64) { sfdata[tid] += sfdata[tid + 64]; } __syncthreads();
-    if (tid < 32) warpReduce(sfdata, tid);
-    if (tid < 256) { qfdata[tid] += qfdata[tid + 256]; } __syncthreads();
-    if (tid < 128) { qfdata[tid] += qfdata[tid + 128]; } __syncthreads();
-    if (tid < 64) { qfdata[tid] += qfdata[tid + 64]; } __syncthreads();
-    if (tid < 32) warpReduce(qfdata, tid);
+    if (threadIdx.x < 256) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 256].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 256].y;
+    }
+    __syncthreads();
 
-    if (tid == 0) sums[blockIdx.x] = sfdata[0];
-    if (tid == 0) qsums[blockIdx.x] = qfdata[0];
+    if (threadIdx.x < 128) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 128].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 128].y;
+    }
+    __syncthreads();
+
+    if (threadIdx.x < 64) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 64].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 64].y;
+    }
+    __syncthreads();
+
+    if (threadIdx.x < 32) {
+      sdata[threadIdx.x].x += sdata[threadIdx.x + 32].x;
+      sdata[threadIdx.x].y += sdata[threadIdx.x + 32].y;
+    }
+    __syncthreads();
+
+    if (threadIdx.x < 32) {
+      // Ensure all threads in the warp are active for __shfl_down_sync
+      unsigned int mask = __activemask();
+      for (int offset = 16; offset > 0; offset >>= 1) {
+        sdata[threadIdx.x].x += __shfl_down_sync(mask, sdata[threadIdx.x].x, offset);
+        sdata[threadIdx.x].y += __shfl_down_sync(mask, sdata[threadIdx.x].y, offset);
+      }
+    }
+
+    if (threadIdx.x == 0)
+    {
+      sums[blockIdx.x] = sdata[threadIdx.x].x;
+      qsums[blockIdx.x] = sdata[threadIdx.x].y;
+    }
   }
 
 } // namespace anonymous
@@ -86,21 +149,21 @@ namespace {
 float hella::calculate_stddev(pinfo_t *p, half * data, int width, int height, int stride)
 {
   int new_width = (int)(512*floor(width/512.));
-  int nblocks = new_width*height / 512;
+  int nblocks = height;
 
-  const size_t sums_size = sizeof(float) * nblocks;
+  const size_t sums_size = sizeof(float) * height;
   hella::lock_d_scratch(p, sums_size * 2);
   auto d_sums = reinterpret_cast<float*>(p->d_scratch);
   auto d_qsums = d_sums + nblocks;
 
-  sumArray<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,height,stride);
+  sumArray<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,stride);
 
   hella::lock_h_scratch(p, sums_size * 2);
   auto sums = reinterpret_cast<float*>(p->h_scratch);
   auto qsums = sums + nblocks;
 
-  checkCuda(cudaMemcpy(sums,d_sums, sums_size,cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(qsums,d_qsums, sums_size,cudaMemcpyDeviceToHost));
+  checkCuda(cudaMemcpy(sums, d_sums, sums_size, cudaMemcpyDeviceToHost));
+  checkCuda(cudaMemcpy(qsums, d_qsums, sums_size, cudaMemcpyDeviceToHost));
 
   float sum=0., qsum=0.;
   for (int i=0;i<nblocks;i++) {
@@ -122,13 +185,13 @@ float hella::calculate_stddev(pinfo_t *p, half * data, int width, int height, in
 float hella::calculate_stddev_float(pinfo_t *p, float * data, int width, int height, int stride)
 {
   int new_width = static_cast<int>(512*floor(width/512.));
-  int nblocks = new_width*height / 512;
+  int nblocks = height;
 
-  const size_t sums_size = sizeof(float) * nblocks;
+  const size_t sums_size = sizeof(float) * height;
   hella::lock_d_scratch(p, sums_size * 2);
   auto d_sums = reinterpret_cast<float*>(p->d_scratch);
   auto d_qsums = d_sums + nblocks;
-  sumArrayFloat<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,height,stride);
+  sumArrayFloat<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,stride);
 
   hella::lock_h_scratch(p, sums_size * 2);
   auto sums = reinterpret_cast<float*>(p->h_scratch);

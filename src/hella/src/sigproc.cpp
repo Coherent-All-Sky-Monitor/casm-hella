@@ -6,11 +6,15 @@
  *
  ***************************************************************************/
 
+#include "hella/alloc.h"
+#include "hella/definitions.h"
 #include "hella/sigproc.h"
 
 #include <cstring>
+#include <cstdio>
 #include <cstdlib>
 
+#define LIAM_FILTERBANK_HACK
 namespace
 {
   /**
@@ -25,12 +29,32 @@ namespace
     int nchar;
     strcpy(string,"ERROR");
     fread(&nchar, sizeof(int), 1, inputfile);
+    spdlog::trace("get_string nchar={}", nchar);
     *nbytes=sizeof(int);
-    if (feof(inputfile)) exit(0);
-    if (nchar>80 || nchar<1) return;
+    if (feof(inputfile))
+      exit(0);
+    if (nchar>80 || nchar<1)
+      return;
     fread(string, nchar, 1, inputfile);
     string[nchar]='\0';
+    spdlog::trace("get_string string={}", string);
     *nbytes+=nchar;
+  }
+
+  int get_int(FILE *inputfile)
+  {
+    int val{0};
+    fread(&val, sizeof(int), 1, inputfile);
+    spdlog::trace("get_int val={}", val);
+    return val;
+  }
+
+  double get_double(FILE *inputfile)
+  {
+    double val{0};
+    fread(&val, sizeof(double), 1, inputfile);
+    spdlog::trace("get_int val={}", val);
+    return val;
   }
 
   /**
@@ -48,6 +72,23 @@ namespace
       return 0;
     }
   }
+}
+
+FILE* hella::open_filterbank_file(const char * filename)
+{
+  const char* modes = "rb";
+  FILE* fin = fopen(filename, modes);
+  int nbytes_header = hella::read_header(fin);
+  fclose(fin);
+
+  char *header{nullptr};
+  hella::alloc_cpu<char>(&header, nbytes_header);
+  fin = fopen(filename, modes);
+  fread(header, sizeof(char), nbytes_header, fin);
+  hella::release_cpu(&header);
+
+  spdlog::trace("Finished with header (nbytes {}) of input filFile {}", nbytes_header, filename);
+  return fin;
 }
 
 /**
@@ -73,8 +114,33 @@ int hella::read_header (FILE *inputfile) /* includefile */
 
   /* loop over and read remaining header lines until HEADER_END reached */
   while (1) {
+
     get_string(inputfile,&nbytes,string);
+    spdlog::trace("string={}", string);
     if (strings_equal(string,"HEADER_END")) break;
+
+    #ifdef LIAM_FILTERBANK_HACK
+    if (
+      (strcmp(string, "machine_id") == 0) ||
+      (strcmp(string, "telescope_id") == 0) ||
+      (strcmp(string, "data_type") == 0) ||
+      (strcmp(string, "barycentric") == 0) ||
+      (strcmp(string, "pulsarcentric") == 0) ||
+      (strcmp(string, "nbits") == 0) ||
+      (strcmp(string, "nifs") == 0) ||
+      (strcmp(string, "nchans") == 0) ||
+      (strcmp(string, "ibeam") == 0) ||
+      (strcmp(string, "nbeams") == 0)
+    )
+      get_int(inputfile);
+    if (
+      (strcmp(string, "fch1") == 0) ||
+      (strcmp(string, "foff") == 0) ||
+      (strcmp(string, "tsamp") == 0) ||
+      (strcmp(string, "tstart") == 0)
+    )
+      get_double(inputfile);
+    #endif
   }
   /* return total number of bytes read */
   return ftell(inputfile);

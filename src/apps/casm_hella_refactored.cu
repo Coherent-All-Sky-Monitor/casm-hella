@@ -33,15 +33,8 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/select.h>
-#include <syslog.h>
 
-#include "sock.h"
-#include "tmutil.h"
-#include "dada_client.h"
-#include "dada_def.h"
-#include "dada_hdu.h"
 #include "ipcio.h"
-#include "ipcbuf.h"
 #include "dada_affinity.h"
 #include "ascii_header.h"
 
@@ -52,8 +45,6 @@
 #include <cstdio>
 #include <spdlog/spdlog.h>
 
-//using namespace std;
-
 #include "hella/definitions.h"
 #include "hella/macros.h"
 
@@ -61,7 +52,6 @@ int finished = 0;
 
 //! get the GPU id from the configuration file, identified by the GPU keyword
 int get_gpu_id(FILE *fconf) {
-
   char * line = NULL;
   ssize_t read;
   size_t len = 0;
@@ -232,15 +222,11 @@ void initialize(FILE *fconf, pinfo * p) {
   const size_t nrewind_chan_beams = nrewind * NCHAN * NBEAMS;
   const size_t ntime_chan_beams = static_cast<size_t>(p->NTIME) * NCHAN * NBEAMS;
 
-  spdlog::info("alloc p->h_flagSpec");
   hella::alloc_cpu<float>(&p->h_flagSpec, NCHAN * NBATCH);
-  spdlog::info("alloc p->d_flagSpec");
   hella::alloc_gpu<float>(&p->d_flagSpec, NCHAN * NBATCH);
-  spdlog::info("alloc p->rewinds nelements={}", nrewind * NCHAN * NBEAMS);
   hella::alloc_cpu<unsigned char>(&p->rewinds, nrewind * NCHAN * NBEAMS);
   memset(p->rewinds, 0, nrewind * NCHAN * NBEAMS);
 
-  spdlog::info("alloc p->data p->NTIME={} NBEAMS={} NCHAN={}, nelements={}", p->NTIME, NBEAMS, NCHAN, p->NTIME * NBEAMS * NCHAN);
   hella::alloc_cpu_host<unsigned char>(&p->data, p->NTIME * NBEAMS * NCHAN);
 
   hella::alloc_cpu<float>(&p->h_dataF, p->NTIME * NCHAN);
@@ -251,7 +237,6 @@ void initialize(FILE *fconf, pinfo * p) {
   hella::alloc_gpu_pitch<half>(&p->batch, reinterpret_cast<size_t*>(&p->batch_stride), p->NTIME, NBATCH * NCHAN);
   hella::alloc_gpu_pitch<half>(&p->mask, reinterpret_cast<size_t*>(&p->batch_stride), p->NTIME, NBATCH * NCHAN);
   p->batch_stride = p->batch_stride / sizeof(half);
-  spdlog::info("p->batch_stride={}", p->batch_stride);
 
   hella::alloc_gpu<half>(&p->d_smooth, p->batch_stride * NBATCH * NCHAN);
   p->d_dedisp = nppiMalloc_32f_C1(p->ntime_dd,p->ndms,&(p->d_dedisp_step));
@@ -488,16 +473,6 @@ int main(int argc, char *argv[])
   cudaSetDevice(get_gpu_id(fconf));
   int currentDevice;
   cudaGetDevice(&currentDevice);
-
-  // startup syslog message
-  // using LOG_LOCAL0
-  if (currentDevice==0)
-    openlog ("dsaX_hella0", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
-  else
-    openlog ("dsaX_hella1", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL0);
-  syslog (LOG_NOTICE, "Program started by User %d", getuid ());
-
-
   spdlog::info("Using GPU ID {}",currentDevice);
 
   // Bind to cpu core
@@ -509,7 +484,6 @@ int main(int argc, char *argv[])
       spdlog::error("failed to bind to core {}", core);
     }
   }
-
 
   // set up pipeline, allocate appropriate mem
   pinfo p;
@@ -584,63 +558,30 @@ int main(int argc, char *argv[])
   }
 
   // DADA Header plus Data Unit
-  dada_hdu_t* hdu_in = 0;
-  dada_hdu_t* hdu_out = 0;
-  key_t in_key = DADA_BLOCK_KEY;
-  key_t out_key = DADA_BLOCK_KEY;
-  char * header_in, * header_out;
-  uint64_t header_size = 0;
-  uint64_t block_size, block_out;
+  dada_hdu_t* hdu_in{nullptr};
 
-  // dada input
-  if (p.inp_format==0) {
+  switch (p.inp_format)
+  {
+    case 0: // dada input
+      hdu_in = hella::hdu_connect_read(&p);
+      break;
 
-    sscanf(p.inp_path, "%x", &in_key);
-    multilog_t* log = multilog_open("casm_hella", LOG_INFO);
-    hdu_in  = dada_hdu_create (log);
-    dada_hdu_set_key (hdu_in, in_key);
-    dada_hdu_connect (hdu_in);
-    dada_hdu_lock_read (hdu_in);
-    header_in = ipcbuf_get_next_read (hdu_in->header_block, &header_size);
-    ipcbuf_mark_cleared (hdu_in->header_block);
-    block_size = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_in->data_block);
-    spdlog::info("Connected to dada buffer");
+    case 1: // text file input
+      fin=fopen(p.inp_path,"r");
+      for (int i=0;i<p.NTIME*NCHAN;i++) {
+        fscanf(fin,"%f\n",&v);
+        p.data[i] = (unsigned char)(v);
+      }
+      fclose(fin);
+      break;
 
-    sscanf(p.dada_out, "%x", &out_key);
-    hdu_out  = dada_hdu_create (log);
-    dada_hdu_set_key (hdu_out, out_key);
-    dada_hdu_connect (hdu_out);
-    dada_hdu_lock_write(hdu_out);
-    header_out = ipcbuf_get_next_write (hdu_out->header_block);
-    memcpy (header_out, header_in, header_size);
-    ipcbuf_mark_filled (hdu_out->header_block, header_size);
-    block_out = ipcbuf_get_bufsz ((ipcbuf_t *) hdu_out->data_block);
-    spdlog::info("Ready for output buffer");
+    case 2: // filterbank input
+      fin = hella::open_filterbank_file(p.inp_path);
+      break;
 
-  }
-
-  // text file input
-  if (p.inp_format==1) {
-    fin=fopen(p.inp_path,"r");
-    for (int i=0;i<p.NTIME*NCHAN;i++) {
-      fscanf(fin,"%f\n",&v);
-      p.data[i] = (unsigned char)(v);
-    }
-    fclose(fin);
-  }
-
-  // filterbank input
-  if (p.inp_format==2) {
-    fin=fopen(p.inp_path,"rb");
-
-    int nbytes_header = hella::read_header(fin);
-    fclose(fin);
-    char *header{nullptr};
-    hella::alloc_cpu<char>(&header, nbytes_header);
-    fin=fopen(p.inp_path,"rb");
-    fread(header, sizeof(char), nbytes_header, fin);
-    hella::release_cpu(&header);
-    spdlog::info("Finished with header (nbytes {}) of input filFile {}",nbytes_header,p.inp_path);
+    default:
+      spdlog::error("unsupported input format: {}", p.inp_format);
+      return EXIT_FAILURE;
   }
 
   spdlog::info("Starting...");
@@ -670,7 +611,6 @@ int main(int argc, char *argv[])
   clock_t begin, end;
 
   // outputs
-  //float * hodata = (float *)malloc(sizeof(float)*p.ntime_out*(p.ndms-2));
   float tot_flags = 0.;
   int socket_count = 0;
 
@@ -709,7 +649,6 @@ int main(int argc, char *argv[])
       // dada input
       if (p.inp_format==0) {
         memcpy(p.data + beam_time_stride*bmm + beam_rewind_stride, block + beam_gulp_stride*(bmm+p.BEAM_OFFSET), beam_gulp_stride);
-        // spdlog::info("bmm={} beam_time_stride={} offset={}", bmm, beam_time_stride, beam_time_stride*bmm);
         memcpy(p.data + beam_time_stride*bmm, p.rewinds + beam_rewind_stride*bmm, beam_rewind_stride);
         memcpy(p.rewinds + beam_rewind_stride*bmm, p.data + beam_time_stride*bmm + beam_gulp_stride, beam_rewind_stride);
       }
@@ -727,14 +666,6 @@ int main(int argc, char *argv[])
     checkCuda(cudaMemcpy(p.d_data,p.data,bytes_to_copy,cudaMemcpyHostToDevice));
     end = clock();
     readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
-
-    // if gulp is zero
-    if (p.inp_format==0 && gulp==0)
-    {
-      for (int bmm=0;bmm<NBEAMS;bmm++)
-        checkCuda(cudaMemcpy(p.data + beam_gulp_stride*bmm, p.d_data + beam_time_stride*bmm + beam_rewind_stride, beam_gulp_stride, cudaMemcpyDeviceToHost));
-      written = ipcio_write (hdu_out->data_block, reinterpret_cast<char*>(p.data), block_out);
-    }
 
     if ((gulp>0 && p.inp_format!=1) || (p.inp_format==1))
     {
@@ -756,26 +687,6 @@ int main(int argc, char *argv[])
 
       end = clock();
       flagt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
-
-      // write to dada
-      begin = clock();
-      if (p.inp_format==0)
-      {
-        for (uint64_t bmm=0;bmm<NBEAMS;bmm++)
-          checkCuda(cudaMemcpy(p.data + bmm*p.gulp*NCHAN, p.d_data + bmm*p.NTIME*NCHAN + NCHAN*(p.NTIME-p.gulp),p.gulp*NCHAN, cudaMemcpyDeviceToHost));
-        written = ipcio_write (hdu_out->data_block, (char *)(p.data), block_out);
-      }
-      end = clock();
-      readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
-
-      // write out to disk
-      /*cudaMemcpy(hodata,p.d_data,NCHAN*p.NTIME,cudaMemcpyDeviceToHost);
-      ftest = fopen("image.out","w");
-      for (int i=0;i<NCHAN*p.NTIME;i++)
-      {
-        fprintf(ftest,"%f\n",(float)(hodata[i]));
-      }
-      fclose(ftest);*/
 
       // loop over beams to dedisperse and search
       // check time, out_npeaks
@@ -866,7 +777,7 @@ int main(int argc, char *argv[])
   // deallocate stuff
   if (p.inp_format==0)
   {
-    hella::hdu_cleanup(hdu_in, hdu_out);
+    hella::hdu_cleanup(hdu_in);
   }
 
   hella::release_cpu(&hodata);
