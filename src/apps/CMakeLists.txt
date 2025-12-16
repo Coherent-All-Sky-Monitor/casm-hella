@@ -56,8 +56,6 @@ target_link_libraries(
 
 target_link_libraries(
   casm_hella_refactored
-  PRIVATE
-    spdlog::spdlog
   PUBLIC
     hella-core
 )

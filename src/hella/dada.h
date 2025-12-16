@@ -6,6 +6,8 @@
  *
  ***************************************************************************/
 
+#include "hella/definitions.h"
+
 #include <dada_hdu.h>
 
 #ifndef HELLA_DADA_H
@@ -13,7 +15,15 @@
 
 namespace hella {
 
-  void hdu_cleanup (dada_hdu_t * in, dada_hdu_t * out);
+  /**
+   * @brief Connect and lock to a PSRDADA ring buffer as defined in the pipeline info struct.
+   *
+   * @param p pipeline info struct
+   * @return dada_hdu_t* connected PSRDADA HDU
+   */
+  dada_hdu_t* hdu_connect_read(hella::pinfo_t* p);
+
+  void hdu_cleanup(dada_hdu_t * in);
 
 } // namespace hella
 

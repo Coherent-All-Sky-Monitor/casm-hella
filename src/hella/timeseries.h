@@ -19,7 +19,7 @@ namespace hella
   void ts_correct(half * data, float * d_ts, int width, int stride);
 
   //! function to orchestrate host median filtering of time series
-  void med_filter_ts(pinfo_t* p, float * d_ts, int width);
+  void med_filter_ts(hella::pinfo_t* p, float * d_ts, int width);
 
 } // namespace hella
 

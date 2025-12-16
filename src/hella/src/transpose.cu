@@ -67,10 +67,10 @@ namespace
     for (int j = 0; j < 32; j += 8)
     {
       v = __half2float(tile[threadIdx.x][threadIdx.y + j]);
-      scf = 255./14.;
-      v = scf*(v+4.);
+      scf = 255.f/14.f;
+      v = scf*(v+4.f);
       if (v<0.) v = 0;
-      if (v>255.) v = 255.;
+      if (v>255.f) v = 255.f;
       beam[(y+j)*mywidth + x] = (unsigned char)(v);
     }
   }
@@ -78,7 +78,7 @@ namespace
 } // namespace anonymous
 
 // TODO: handle_transpose_input and handle_transpose_output to do transpose via memcpy2d from intermediate array
-void hella::transpose_input_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_input_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
 {
   spdlog::trace("hella::transpose_input_handler width={} stride={}", width, stride);
 
@@ -110,7 +110,7 @@ void hella::transpose_input_handler(pinfo_t* p, unsigned char * d_data, half * b
   checkCuda(cudaDeviceSynchronize());
 }
 
-void hella::transpose_output_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_output_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
 {
   dim3 dimBlockOut(32, 8), dimGridOut(width/32, NCHAN/32);
   const size_t nval = NCHAN * width;

@@ -17,7 +17,7 @@
 #include <nppi.h>
 #include <npps.h>
 
-void hella::npp_convolve_handler(pinfo_t* p, half * data, half * output, float scfac, int xw, int yw, int width, int stride)
+void hella::npp_convolve_handler(hella::pinfo_t* p, half * data, half * output, float scfac, int xw, int yw, int width, int stride)
 {
   NppiSize oSrcSize = {stride,NCHAN*NBATCH};
   NppiPoint oSrcOffset = {0,0};

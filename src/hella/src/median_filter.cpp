@@ -82,7 +82,7 @@ float hella::median_filter(float *input, float *output, int size, int windowSize
   return mn;
 }
 
-float hella::med_filter_bandpass(pinfo_t* p, float * d_bandpass)
+float hella::med_filter_bandpass(hella::pinfo_t* p, float * d_bandpass)
 {
   // acquire the host scratch space
   const size_t nval = NBATCH * NCHAN;

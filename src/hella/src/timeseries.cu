@@ -73,7 +73,7 @@ void hella::ts_correct(half * data, float * d_ts, int width, int stride)
   checkCuda(cudaDeviceSynchronize());
 }
 
-void hella::med_filter_ts(pinfo_t* p, float * d_ts, int width)
+void hella::med_filter_ts(hella::pinfo_t* p, float * d_ts, int width)
 {
   const size_t nval = NBATCH * width;
   const size_t hts_size = sizeof(float) * nval;

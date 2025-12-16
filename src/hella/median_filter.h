@@ -30,7 +30,7 @@ namespace hella
    * @param d_bandpass bandpass in device memory with size NBATCH * NCHAN
    * @return float mean of the median filtered bandpass
    */
-  float med_filter_bandpass(pinfo_t* p, float * d_bandpass);
+  float med_filter_bandpass(hella::pinfo_t* p, float * d_bandpass);
 
 } // namespace hella
 

@@ -13,7 +13,7 @@
 
 namespace hella
 {
-  void smooth(pinfo *p, int scale);
+  void smooth(hella::pinfo_t *p, int scale);
 
 } // namespace hella
 

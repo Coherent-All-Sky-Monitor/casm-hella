@@ -29,7 +29,7 @@ namespace hella
    * @param width
    * @param stride
    */
-  void npp_convolve_handler(pinfo_t* p, half * data, half * output, float scfac, int xw, int yw, int width, int stride);
+  void npp_convolve_handler(hella::pinfo_t* p, half * data, half * output, float scfac, int xw, int yw, int width, int stride);
 
 } // namespace hella
 

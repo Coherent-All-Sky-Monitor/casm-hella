@@ -14,7 +14,7 @@
 namespace hella
 {
   //! function to do all dedispersion stuff
-  void dedisperse(pinfo *p, int beam);
+  void dedisperse(hella::pinfo_t *p, int beam);
 
   //! return a string describing a dedisp error code
   std::string get_dedisp_error(int dedisp_error_code);

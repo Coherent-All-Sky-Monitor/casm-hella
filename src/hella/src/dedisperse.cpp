@@ -14,14 +14,12 @@
 #include <spdlog/spdlog.h>
 #include <sstream>
 
-void hella::dedisperse(pinfo *p, int beam)
+void hella::dedisperse(hella::pinfo_t *p, int beam)
 {
   const size_t beam_stride = NCHAN * p->NTIME;
   const size_t beam_offset = beam_stride * beam;
   checkCuda(cudaMemcpy(p->d_inputPacked,p->d_data + beam_offset, beam_stride,cudaMemcpyDeviceToDevice));
-
   cudaDeviceSynchronize();
-
 
   dedisp_error       derror;
   const dedisp_byte* in = reinterpret_cast<unsigned char *>(p->d_inputPacked);

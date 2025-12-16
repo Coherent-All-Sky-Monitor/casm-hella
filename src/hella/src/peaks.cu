@@ -28,7 +28,7 @@
 #include <thrust/tuple.h>
 #include <thrust/host_vector.h>
 
-void hella::find_peaks(pinfo_t *p, int bm)
+void hella::find_peaks(hella::pinfo_t *p, int bm)
 {
   float * dmt_ptr = thrust::raw_pointer_cast(&p->dmt[0]);
   float * d_outputs = thrust::raw_pointer_cast(&p->output_values[0]);
@@ -43,7 +43,10 @@ void hella::find_peaks(pinfo_t *p, int bm)
     //calculate_stddev_float(float * d_data, int width, int height, int stride)
     if (sm==0) {
       // note: calculate_stddev_float use h and d scratch
-      myStd = hella::calculate_stddev_float(p, p->boxes+sm*(p->ndms-2)*p->boxes_step/sizeof(float),p->ntime_out,p->ndms-2,p->boxes_step/sizeof(float));
+      const int height = p->ndms - 2;
+      const int stride = p->boxes_step / sizeof(float);
+      float* data = p->boxes + sm * height * stride;
+      myStd = hella::calculate_stddev_float(p, data, p->ntime_out, height, stride);
       if (bm==32) spdlog::debug("STDDEV {}",myStd);
       if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
       if (myStd<STD_DEV_VERY_LOW_THRESHOLD) myStd = 2.;
@@ -103,7 +106,7 @@ void hella::find_peaks(pinfo_t *p, int bm)
   p->out_npeaks = imax;
 }
 
-void hella::clear_peaks(pinfo_t *p)
+void hella::clear_peaks(hella::pinfo_t *p)
 {
   memset(p->out_peaks,0,MAX_GIANTS*sizeof(float));
   memset(p->out_beam,0,MAX_GIANTS*sizeof(int));
@@ -113,7 +116,7 @@ void hella::clear_peaks(pinfo_t *p)
   p->out_npeaks = 0;
 }
 
-void hella::output_peaks(pinfo_t *p, int samp, int restart_socket)
+void hella::output_peaks(hella::pinfo_t *p, int samp, int restart_socket)
 {
   // if output is file or both
   if (p->out_format != 1) {

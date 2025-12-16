@@ -24,7 +24,7 @@ namespace hella
    * @param width
    * @param stride
    */
-  void normalize_data(pinfo_t * p, half * input_data, int width, int stride);
+  void normalize_data(hella::pinfo_t * p, half * input_data, int width, int stride);
 
   /**
    * @brief Function to implement bandpass flagging on data
@@ -35,10 +35,10 @@ namespace hella
    * @param data
    * @return float
    */
-  float bandpass_flag(pinfo * p, half * data);
+  float bandpass_flag(hella::pinfo_t * p, half * data);
 
   //! function to bandpass-correct data [uses h and d scratch]
-  float bandpass_correct(pinfo_t* p, half * data, int width, int stride);
+  float bandpass_correct(hella::pinfo_t* p, half * data, int width, int stride);
 
   //! function to ts-correct data
   void ts_correct(half * data, float * d_ts, int width, int stride);
@@ -65,13 +65,13 @@ namespace hella
    * @param flag2
    * @return float
    */
-  float apply_scrunch(pinfo * p, half * data, half * mask, half * d_smooth, float * d_ts, int width, int stride, int tscrunch, int fscrunch, float thresh, int flag, int ts, float * d_flagSpec, int flag1, int flag2);
+  float apply_scrunch(hella::pinfo_t * p, half * data, half * mask, half * d_smooth, float * d_ts, int width, int stride, int tscrunch, int fscrunch, float thresh, int flag, int ts, float * d_flagSpec, int flag1, int flag2);
 
   // flagger
   // load a batch beam by beam
   // apply all scrunches to the batch
   // unload the batch
-  void fast_flagger(pinfo * p);
+  void fast_flagger(hella::pinfo_t * p);
 
 } // namespace hella
 
