@@ -78,7 +78,7 @@ namespace
 } // namespace anonymous
 
 // TODO: handle_transpose_input and handle_transpose_output to do transpose via memcpy2d from intermediate array
-void hella::transpose_input_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_input_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
 {
   spdlog::trace("hella::transpose_input_handler width={} stride={}", width, stride);
 
@@ -110,7 +110,7 @@ void hella::transpose_input_handler(pinfo_t* p, unsigned char * d_data, half * b
   checkCuda(cudaDeviceSynchronize());
 }
 
-void hella::transpose_output_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_output_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
 {
   dim3 dimBlockOut(32, 8), dimGridOut(width/32, NCHAN/32);
   const size_t nval = NCHAN * width;

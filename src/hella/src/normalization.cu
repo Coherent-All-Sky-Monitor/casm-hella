@@ -15,17 +15,6 @@
 
 namespace {
 
-  // kernel to warp reduce float
-  __device__ void warpReduce(volatile float *sdata, unsigned int tid)
-  {
-    sdata[tid] += sdata[tid + 32];
-    sdata[tid] += sdata[tid + 16];
-    sdata[tid] += sdata[tid + 8];
-    sdata[tid] += sdata[tid + 4];
-    sdata[tid] += sdata[tid + 2];
-    sdata[tid] += sdata[tid + 1];
-  }
-
   // each block will compute the sums and qsums for a row
   __global__ void sumArray(const half * data, float * sums, float * qsums, int width, int stride)
   {
@@ -146,7 +135,7 @@ namespace {
 
 } // namespace anonymous
 
-float hella::calculate_stddev(pinfo_t *p, half * data, int width, int height, int stride)
+float hella::calculate_stddev(hella::pinfo_t *p, half * data, int width, int height, int stride)
 {
   int new_width = (int)(512*floor(width/512.));
   int nblocks = height;
@@ -182,7 +171,7 @@ float hella::calculate_stddev(pinfo_t *p, half * data, int width, int height, in
   return stdDev;
 }
 
-float hella::calculate_stddev_float(pinfo_t *p, float * data, int width, int height, int stride)
+float hella::calculate_stddev_float(hella::pinfo_t *p, float * data, int width, int height, int stride)
 {
   int new_width = static_cast<int>(512*floor(width/512.));
   int nblocks = height;

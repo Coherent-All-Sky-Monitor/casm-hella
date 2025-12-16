@@ -16,7 +16,7 @@
 #include <nppi.h>
 #include <npps.h>
 
-void hella::smooth(pinfo_t *p, int scale)
+void hella::smooth(hella::pinfo_t *p, int scale)
 {
   NppiSize oSrcSize = {p->ntime_dd,p->ndms};
   NppiPoint oSrcOffset = {0,0};

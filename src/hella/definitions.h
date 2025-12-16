@@ -78,6 +78,7 @@ const int MAXRECV = 500;
 #define STD_DEV_HIGH_THRESHOLD 1.5
 #define STD_DEV_VERY_HIGH_THRESHOLD 0.92
 
+namespace hella {
 // define a SCRUNCH structure
 typedef struct scrunch {
 
@@ -95,7 +96,7 @@ typedef struct pinfo {
   char dada_out[100];
   float minDM, maxDM, snr;
   int minWidth, maxWidth;
-  int gulp;
+  unsigned long gulp;
   scrunch * scrunches; // array of scrunches
   int nscrunches;
   char beamflags[500], specflags[500];
@@ -173,5 +174,7 @@ typedef struct pinfo {
   bool d_scratch_locked{false};
 
 } pinfo_t;
+
+} // namespace hella
 
 #endif // HELLA_DEFINITIONS_H

@@ -50,28 +50,8 @@
 
 int finished = 0;
 
-//! get the GPU id from the configuration file, identified by the GPU keyword
-int get_gpu_id(FILE *fconf) {
-  char * line = NULL;
-  ssize_t read;
-  size_t len = 0;
-  char c1[20], c2[500];
-
-  while (!feof(fconf)) {
-
-    read = getline(&line, &len, fconf);
-    sscanf(line,"%s %s",c1,c2);
-    if (strcmp(c1,"GPU")==0) {
-      rewind(fconf);
-      return atoi(c2);
-    }
-
-  }
-  return 0;
-}
-
-// function to initialize everything based on a config file
-void initialize(FILE *fconf, pinfo * p) {
+//! function to initialize everything based on a config file
+void initialize(FILE *fconf, hella::pinfo_t* p) {
 
   // read input file line by line
   p->nscrunches = 0;
@@ -85,6 +65,8 @@ void initialize(FILE *fconf, pinfo * p) {
   p->spec_min = -0.05;
   p->spec_max = 0.15;
   p->output_bandpass = 0;
+  int gpu_id = 0;
+
   while (!feof(fconf)) {
 
     read = getline(&line, &len, fconf);
@@ -161,11 +143,13 @@ void initialize(FILE *fconf, pinfo * p) {
       p->spec_max=atof(c2);
     if (strcmp(c1,"OUTPUT_BANDPASS")==0)
       p->output_bandpass=atoi(c2);
+    if (strcmp(c1,"GPU")==0)
+      gpu_id = atoi(c2);
 
     if (strcmp(c1,"SCRUNCH")==0) {
 
       p->nscrunches = atoi(c2);
-      p->scrunches = (scrunch *)malloc(p->nscrunches*sizeof(scrunch));
+      p->scrunches = reinterpret_cast<hella::scrunch *>(malloc(p->nscrunches*sizeof(hella::scrunch)));
 
       for (int i=0;i<p->nscrunches;i++) {
         read = getline(&line, &len, fconf);
@@ -176,6 +160,17 @@ void initialize(FILE *fconf, pinfo * p) {
     }
   }
   fclose(fconf);
+
+  // set GPU ID
+  cudaSetDevice(gpu_id);
+  int current_device{-1};
+  cudaGetDevice(&current_device);
+  if (current_device != gpu_id)
+  {
+    spdlog::error("failed to select GPU ID {}", gpu_id);
+    exit(EXIT_FAILURE);
+  }
+  spdlog::info("Using GPU ID {}",current_device);
 
   // derived parameters
   p->NTIME=p->gulp;
@@ -204,14 +199,15 @@ void initialize(FILE *fconf, pinfo * p) {
   p->ntime_dedisp = p->ntime_dd;
   // modify NTIME and ntime_dd in case of non-text input
   int oo;
-  if (p->inp_format == 0 || p->inp_format == 2) {
+  if (p->inp_format == 0 || p->inp_format == 2)
+  {
     p->NTIME = p->gulp + dedisp_get_max_delay(p->dedispersion_plan) + p->maxWidth;
     oo = 32*((int)(p->NTIME/32)+1);
     p->NTIME = oo;
     p->ntime_dedisp = oo-dedisp_get_max_delay(p->dedispersion_plan);
     p->ntime_dd = p->gulp + p->maxWidth;
     p->ntime_out = p->gulp;
-    spdlog::info("dedisp_get_max_delay(p->dedispersion_plan)={}", dedisp_get_max_delay(p->dedispersion_plan));
+    spdlog::debug("dedisp_get_max_delay(p->dedispersion_plan)={}", dedisp_get_max_delay(p->dedispersion_plan));
   }
 
   spdlog::info("sizes NCHAN={} NBATCH={} p->NTIME={} p->gulp={} NBEAMS={} ndms={} ntime_dedisp={} ntime_dd={}",
@@ -300,9 +296,9 @@ void initialize(FILE *fconf, pinfo * p) {
 }
 
 // deallocate everything
-void deallocator(pinfo * p)
+void deallocator(hella::pinfo_t * p)
 {
-  spdlog::info("deallocating pinfo struct");
+  spdlog::info("deallocating pinfo_t struct");
   hella::release_cpu_host(&p->data);
   hella::release_cpu(&p->h_dataF);
   hella::release_gpu(&p->d_bpout);
@@ -329,7 +325,11 @@ void deallocator(pinfo * p)
 
 void help() {
 
-  spdlog::info("Usage: pipeline -c <config file>");
+  spdlog::info("Usage: pipeline [options] <config file>");
+  spdlog::info("options:");
+  spdlog::info("   -i core     bind processing to the specified cpu core");
+  spdlog::info("   -v          increase the logging verbosity");
+  spdlog::info("");
   spdlog::info("Everything is in the config file. Specific parameters include: ");
   spdlog::info("INPUT <DADA or FILE or FILTERBANK>");
   spdlog::info("INPUT_PATH <dada buffer or full path to filterbank file>");
@@ -379,7 +379,7 @@ __global__ void generate_randoms(curandState* globalState, float* randoms)
     randoms[tid * 2 + 1] = curand_normal(&localState);
 }
 
-void measure_thresholds(pinfo *p) {
+void measure_thresholds(hella::pinfo_t *p) {
 
   // generate data
   spdlog::info("THRESHOLD: Generating random values");
@@ -445,40 +445,64 @@ void measure_thresholds(pinfo *p) {
 */
 
 // deals with data IO
-int main(int argc, char *argv[])
+int main(int argc, char *argv[]) try
 {
   // parse command line
   FILE *fconf{nullptr};
   int core = -1;
-  for (int i=1;i<argc;i++) {
+  int verbosity = 0;
 
-    // configuration
-    if (strcmp(argv[i],"-c")==0) {
-      fconf=fopen(argv[i+1],"r");
-      spdlog::info("Getting config from {}",argv[i+1]);
-      fprintf(stderr, "Getting config from %s\n",argv[i+1]);
-    }
-    if (strcmp(argv[i],"-i")==0) {
-      core = atoi(argv[i+1]);
-    }
-    // help
-    if (strcmp(argv[i],"-h")==0) {
-      help();
-      exit(1);
-    }
+  opterr = 0;
+  int c{};
 
+  while ((c = getopt(argc, argv, "c:i:hv")) != EOF)
+  {
+    switch (c)
+    {
+      case 'c':
+        spdlog::info("Getting config from {}", optarg);
+        fconf = fopen(optarg, "r");
+        break;
+
+      case 'h':
+        help();
+        exit(EXIT_SUCCESS);
+
+      case 'i':
+        core = atoi(optarg);
+        break;
+
+      case 'v':
+        verbosity++;
+        spdlog::info("verbosity now {}", verbosity);
+        if (verbosity == 1)
+        {
+          spdlog::info("set_level(spdlog::level::debug)");
+          spdlog::set_level(spdlog::level::debug);
+        }
+        else if (verbosity >= 2)
+        {
+          spdlog::info("set_level(spdlog::level::trace)");
+          spdlog::set_level(spdlog::level::trace);
+        }
+        else
+        {
+          spdlog::info("set_level(spdlog::level::info)");
+          // spdlog::set_level(spdlog::level::info);
+        }
+        break;
+
+      default:
+        spdlog::error("Unrecognised option: {}", static_cast<char>(optopt));
+        help();
+        return EXIT_FAILURE;
+    }
   }
-
-  // set GPU ID
-  cudaSetDevice(get_gpu_id(fconf));
-  int currentDevice;
-  cudaGetDevice(&currentDevice);
-  spdlog::info("Using GPU ID {}",currentDevice);
 
   // Bind to cpu core
   if (core >= 0)
   {
-    spdlog::info("binding to core {}", core);
+    spdlog::debug("binding to core {}", core);
     if (dada_bind_thread_to_core(core) < 0)
     {
       spdlog::error("failed to bind to core {}", core);
@@ -486,7 +510,7 @@ int main(int argc, char *argv[])
   }
 
   // set up pipeline, allocate appropriate mem
-  pinfo p;
+  hella::pinfo_t p{};
   float tflags = 0.;
 
   initialize(fconf,&p);
@@ -501,7 +525,8 @@ int main(int argc, char *argv[])
 
     // read header
     fin=fopen(p.inp_path,"rb");
-    int nbytes_header = hella::read_header(fin);
+    hella::filterbank_header_t hdr;
+    int nbytes_header = hella::read_header(fin, &hdr);
     fclose(fin);
     char * header{nullptr};
     hella::alloc_cpu<char>(&header, nbytes_header);
@@ -554,6 +579,7 @@ int main(int argc, char *argv[])
   unsigned char * sigproc_buf{nullptr};
   if (p.inp_format == 2)
   {
+    spdlog::info("allocating sigproc_buf");
     hella::alloc_cpu<unsigned char>(&sigproc_buf, p.gulp * NCHAN * NBEAMS * 2);
   }
 
@@ -784,4 +810,8 @@ int main(int argc, char *argv[])
   hella::release_cpu(&sigproc_buf);
 
   deallocator(&p);
+}
+catch (std::exception& exc)
+{
+  spdlog::error("Runtime error: {}", exc.what());
 }

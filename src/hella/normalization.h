@@ -27,7 +27,7 @@ namespace hella
    * @param stride
    * @return float
    */
-  float calculate_stddev(pinfo_t *p, half * data, int width, int height, int stride);
+  float calculate_stddev(hella::pinfo_t *p, half * data, int width, int height, int stride);
 
   /**
    * @brief Host function to orchestrate the normalization process on float32 input
@@ -41,7 +41,7 @@ namespace hella
    * @param stride
    * @return float
    */
-  float calculate_stddev_float(pinfo_t *p, float * data, int width, int height, int stride);
+  float calculate_stddev_float(hella::pinfo_t *p, float * data, int width, int height, int stride);
 
 } // namespace hella
 

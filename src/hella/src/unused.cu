@@ -80,7 +80,7 @@ namespace
 } // namespace anonymous
 
 // function to remove time-frequency baseline
-void hella::remove_tf_baseline(pinfo_t *p, half * data, int width, int stride) {
+void hella::remove_tf_baseline(hella::pinfo_t *p, half * data, int width, int stride) {
 
   // allocate smooth array
   half * d_smooth;

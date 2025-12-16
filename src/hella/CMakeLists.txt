@@ -66,4 +66,5 @@ target_link_libraries(
     CUDA::nppisu
     CUDA::nppc
     CUDA::cublas
+    spdlog::spdlog
 )

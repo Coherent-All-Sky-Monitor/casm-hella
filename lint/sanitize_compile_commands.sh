@@ -17,6 +17,7 @@ jq '[ . - map(select(.file | contains("/resources/"))) | .[] ]' $COMPILE_COMMAND
 jq '[ .[] | .command |= sub("nvcc";"nvcc -I'"${SOURCE_PATH}"'/lint/patched_headers/ -Xclang -fcuda-allow-variadic-functions --no-cuda-version-check")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS
 jq '[ .[] | .command |= sub("--use_fast_math";"")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS
 jq '[ .[] | .command |= sub("-Xcompiler=-fPIC";"")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS
+jq '[ .[] | .command |= sub("-Xcompiler=-fPIE";"")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS
 jq '[ .[] | .command |= sub("-forward-unknown-to-host-compiler";"")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS
 jq '[ .[] | .command |= gsub("--generate-code=.*?\\s";"")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS
 jq '[ .[] | .command |= gsub("--options-file ";"@")  ]' $COMPILE_COMMANDS | sponge $COMPILE_COMMANDS

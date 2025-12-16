@@ -21,7 +21,7 @@ namespace hella {
    * @param p pipeline info struct
    * @return dada_hdu_t* connected PSRDADA HDU
    */
-  dada_hdu_t* hdu_connect_read(pinfo_t* p);
+  dada_hdu_t* hdu_connect_read(hella::pinfo_t* p);
 
   void hdu_cleanup(dada_hdu_t * in);
 

@@ -11,7 +11,7 @@
 #include "ipcbuf.h"
 #include <spdlog/spdlog.h>
 
-dada_hdu_t* hella::hdu_connect_read(pinfo_t* p)
+dada_hdu_t* hella::hdu_connect_read(hella::pinfo_t* p)
 {
   // DADA Header plus Data Unit
   dada_hdu_t* hdu{nullptr};

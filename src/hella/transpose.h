@@ -25,9 +25,9 @@ namespace hella
    * @param width
    * @param stride
    */
-  void transpose_input_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride);
+  void transpose_input_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride);
 
-  void transpose_output_handler(pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride);
+  void transpose_output_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride);
 
 } // namespace hella
 

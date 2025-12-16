@@ -192,7 +192,7 @@ namespace
 
 } // namespace anonymous
 
-void hella::normalize_data(pinfo_t* p, half * data, int width, int stride)
+void hella::normalize_data(hella::pinfo_t* p, half * data, int width, int stride)
 {
   // note: uses h and d scratch
   float stdDev = hella::calculate_stddev(p, data, width, NBATCH*NCHAN, stride);
@@ -209,7 +209,7 @@ void hella::normalize_data(pinfo_t* p, half * data, int width, int stride)
   checkCuda(cudaDeviceSynchronize());
 }
 
-float hella::bandpass_flag(pinfo_t * p, half * data)
+float hella::bandpass_flag(hella::pinfo_t * p, half * data)
 {
   // bandpass correct [uses h and d scratch]
   spdlog::trace("hella::bandpass_flag bandpass_correct(p, data, {}, {})", p->NTIME, p->batch_stride);
@@ -237,7 +237,7 @@ float hella::bandpass_flag(pinfo_t * p, half * data)
   return mn_bp;
 }
 
-float hella::bandpass_correct(pinfo_t* p, half * input_data, int width, int stride)
+float hella::bandpass_correct(hella::pinfo_t* p, half * input_data, int width, int stride)
 {
   const size_t nval = NBATCH * NCHAN;
   const size_t bp_size = sizeof(float) * nval;
@@ -265,7 +265,7 @@ float hella::bandpass_correct(pinfo_t* p, half * input_data, int width, int stri
 }
 
 float hella::apply_scrunch(
-  pinfo_t * p, half * data, half * mask, half * d_smooth, float * d_ts,
+  hella::pinfo_t * p, half * data, half * mask, half * d_smooth, float * d_ts,
   int width, int stride, int tscrunch, int fscrunch, float thresh,
   int flag, int ts, float * d_flagSpec, int flag1, int flag2)
 {
@@ -342,7 +342,7 @@ float hella::apply_scrunch(
 // load a batch beam by beam
 // apply all scrunches to the batch
 // unload the batch
-void hella::fast_flagger(pinfo * p)
+void hella::fast_flagger(hella::pinfo_t * p)
 {
   float begin{}, end{}, tmp{};
 
