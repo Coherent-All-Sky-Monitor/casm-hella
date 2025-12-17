@@ -3,8 +3,8 @@ PROJECT = casm-hella
 
 CUDA_ARCH ?= 89
 
-SOURCE_PATH  ?= $(SRC)/$(PROJECT)
-BUILD_PATH   ?= $(BUILD)/$(PROJECT)
+SOURCE_PATH  ?= $(PWD)
+BUILD_PATH   ?= $(PWD)/build
 INSTALL_PATH ?= $(INST)/$(PROJECT)
 
 # targets to configure for coverage, debug or release
