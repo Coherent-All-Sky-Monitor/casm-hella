@@ -46,12 +46,16 @@ void hella::find_peaks(hella::pinfo_t *p, int bm)
       const int height = p->ndms - 2;
       const int stride = p->boxes_step / sizeof(float);
       float* data = p->boxes + sm * height * stride;
-      myStd = hella::calculate_stddev_float(p, data, p->ntime_out, height, stride);
-      if (bm==32) spdlog::debug("STDDEV {}",myStd);
-      if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
+      myStd = hella::calculate_stddev(p, data, p->ntime_out, height, stride);
+      // TODO(ldunn) I don't really understand how these standard deviation checks are supposed to function. I have reversed the order of these first two checks, so that
+      // if myStd is below STD_DEV_VERY_LOW_THRESHOLD we set myStd to a high value and skip over doing the peak-finding. But anything else
+      // that's between VERY_LOW_THRESHOLD and LOW_THRESHOLD will have myStd set to 1, which seems wrong! It also doesn't seem to be the case that the standard deviations
+      // of sensible data are ~1 at this point in the pipeline anyway, but that might be a bug elsewhere
       if (myStd<STD_DEV_VERY_LOW_THRESHOLD) myStd = 2.;
+      if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
     }
-    if (myStd<STD_DEV_HIGH_THRESHOLD && myStd>STD_DEV_VERY_HIGH_THRESHOLD) {
+    if ((myStd<STD_DEV_HIGH_THRESHOLD && myStd>STD_DEV_VERY_HIGH_THRESHOLD) || DEBUG_ALWAYS_FIND_PEAKS) {
+
 
       // copy to thrust vector
       //cudaMemcpy(dmt_ptr,p->boxes+sm*(p->ndms-2)*p->boxes_step/sizeof(float),(p->ndms-2)*p->boxes_step,cudaMemcpyDeviceToDevice);
@@ -82,6 +86,9 @@ void hella::find_peaks(hella::pinfo_t *p, int bm)
       // iterate npeaks
       p->npeaks += n_found;
     }
+    else {
+      spdlog::debug("hella::find_peaks Skipping beam {}, std dev={}", bm, myStd);
+    }
   }
 
   // sort out stuff on host
@@ -94,7 +101,7 @@ void hella::find_peaks(hella::pinfo_t *p, int bm)
     imax = p->out_npeaks+p->npeaks;
   for (int i=p->out_npeaks;i<imax;i++)
   {
-    spdlog::trace("find_peaks: {} {} {}", p->h_idxs[i], (int)(p->h_idxs[i] % p->ntime_dd), (int)(p->h_idxs[i] / p->ntime_dd));
+    //spdlog::trace("find_peaks: {} {} {}", p->h_idxs[i], (int)(p->h_idxs[i] % p->ntime_dd), (int)(p->h_idxs[i] / p->ntime_dd));
     p->out_peaks[i] = p->peaks[i-p->out_npeaks];
     p->out_beam[i] = bm;
     p->out_samp[i] = (int)(p->h_idxs[i-p->out_npeaks] % p->ntime_out);

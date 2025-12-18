@@ -36,9 +36,11 @@ const int MAXRECV = 500;
 
 #define NMEDFILT 13
 #define NTSMED 7
-#define NBATCH 4
+// WARNING: the standard deviation used to normalise a batch of bemas during flagging is calculated across the whole batch. 
+// If the variances of individual beams in a batch differ significantly, the normalisation will not be correct, and the distribution of values in the post-flagging beams can be heavily distorted
+#define NBATCH 1
 #define NCHAN 3072
-#define NBEAMS 128
+#define NBEAMS 1
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
@@ -70,11 +72,13 @@ const int MAXRECV = 500;
 #define BOXCAR_STD_5 0.00047785
 #define BOXCAR_STD_6 0.00036005
 
-// Threshold parameters
+// Threshold parameters 
+// TODO(ldunn) not obvious what these should be - the assumption that the std dev of the time series going to the peak finder is 1 seems like it might not be true
+#define DEBUG_ALWAYS_FIND_PEAKS 1 // Ignore the std. dev thresholds in the peak finding code. Intended for profiling with fake data
 #define TIME_SERIES_HIGH_THRESHOLD 1.05
 #define TIME_SERIES_LOW_THRESHOLD 0.95
 #define STD_DEV_LOW_THRESHOLD 1.2
-#define STD_DEV_VERY_LOW_THRESHOLD 0.96
+#define STD_DEV_VERY_LOW_THRESHOLD 0.1
 #define STD_DEV_HIGH_THRESHOLD 1.5
 #define STD_DEV_VERY_HIGH_THRESHOLD 0.92
 
@@ -135,7 +139,9 @@ typedef struct pinfo {
   int d_dedisp_step;
   float * d_dedispPacked{nullptr}; // dedisp output
   unsigned char * d_inputPacked{nullptr}; // dedisp input
-  unsigned char * d_data{nullptr}; // all the input
+  unsigned char *d_gulp{nullptr}; // gulp data pre-flagging - data type and order may vary: for DADA input this is fp16 SFT ordered, for filterbank input this is u8 STF ordered
+  size_t gulp_nbyte{}; // number of bytes per sample in the input gulp
+  unsigned char * d_data{nullptr}; // all the input *post-flagging* including rewind - u8, STF ordered
   half * batch{nullptr}, * mask{nullptr}, * d_smooth{nullptr};
   float * d_ts{nullptr};
   int batch_stride;

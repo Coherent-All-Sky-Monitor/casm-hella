@@ -196,6 +196,7 @@ void hella::normalize_data(hella::pinfo_t* p, half * data, int width, int stride
 {
   // note: uses h and d scratch
   float stdDev = hella::calculate_stddev(p, data, width, NBATCH*NCHAN, stride);
+  spdlog::trace("hella::normalize_data calculated standard deviation = {}", stdDev);
 
   int nt = 512;
   half c = __float2half(-1);
@@ -209,29 +210,29 @@ void hella::normalize_data(hella::pinfo_t* p, half * data, int width, int stride
   checkCuda(cudaDeviceSynchronize());
 }
 
-float hella::bandpass_flag(hella::pinfo_t * p, half * data)
+float hella::bandpass_flag(hella::pinfo_t * p, half * data, int width)
 {
   // bandpass correct [uses h and d scratch]
-  spdlog::trace("hella::bandpass_flag bandpass_correct(p, data, {}, {})", p->NTIME, p->batch_stride);
-  float mn_bp = bandpass_correct(p, data,p->NTIME, p->batch_stride);
+  spdlog::trace("hella::bandpass_flag bandpass_correct(p, data, {}, {})", width, p->batch_stride);
+  float mn_bp = bandpass_correct(p, data, width, p->batch_stride);
 
   // normalize data [uses h and d_scratch]
-  spdlog::trace("hella::bandpass_flag normalize_data(p, data, {}, {})", p->NTIME, p->batch_stride);
-  normalize_data(p, data, p->NTIME, p->batch_stride);
+  spdlog::trace("hella::bandpass_flag normalize_data(p, data, {}, {})", width, p->batch_stride);
+  normalize_data(p, data, width, p->batch_stride);
 
   // calculate bandpass
   const size_t bp_size = sizeof(float) * NBATCH * NCHAN;
   hella::lock_d_scratch(p, bp_size);
   auto bandpass = reinterpret_cast<float*>(p->d_scratch);
-  spdlog::trace("hella::bandpass_flag calc_bandpass_new(data, bandpass, {}, {})", p->NTIME, p->batch_stride);
-  calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(data, bandpass, p->NTIME, p->batch_stride);
+  spdlog::trace("hella::bandpass_flag calc_bandpass_new(data, bandpass, {}, {})", width, p->batch_stride);
+  calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(data, bandpass, width, p->batch_stride);
 
   dim3 blockDim(32 ,16 ,1);
-  dim3 gridDim(p->NTIME/blockDim.x, NBATCH*NCHAN/blockDim.y, 1);
-  if (p->NTIME % blockDim.x != 0)
+  dim3 gridDim(width/blockDim.x, NBATCH*NCHAN/blockDim.y, 1);
+  if (width % blockDim.x != 0)
     gridDim.x++;
-  spdlog::trace("hella::bandpass_flag replace_data_and_add_bandpass(data, bandpass, {}, {}, {}, {})", p->NTIME, p->batch_stride, p->spec_min, p->spec_max);
-  replace_data_and_add_bandpass<<<gridDim,blockDim>>>(data, bandpass, p->NTIME, p->batch_stride, p->spec_min, p->spec_max);
+  spdlog::trace("hella::bandpass_flag replace_data_and_add_bandpass(data, bandpass, {}, {}, {}, {})", width, p->batch_stride, p->spec_min, p->spec_max);
+  replace_data_and_add_bandpass<<<gridDim,blockDim>>>(data, bandpass, width, p->batch_stride, p->spec_min, p->spec_max);
   hella::unlock_d_scratch(p);
 
   return mn_bp;
@@ -338,99 +339,71 @@ float hella::apply_scrunch(
   return mn_bp;
 }
 
-// flagger
-// load a batch beam by beam
-// apply all scrunches to the batch
-// unload the batch
-void hella::fast_flagger(hella::pinfo_t * p)
+void hella::fast_flagger(hella::pinfo_t *p)
 {
-  float begin{}, end{}, tmp{};
+  float begin{}, end{};
 
   // setup
   int nBatches = static_cast<int>(NBEAMS / NBATCH);
-  checkCuda(cudaMemset(p->d_flagSpec,0,4*NBATCH*NCHAN));
-  spdlog::debug("have nbatches {}", nBatches);
+  spdlog::debug("hella::fast_flagger have nbatches {}", nBatches);
   std::vector<float> mn_bp;
   mn_bp.resize(nBatches, 0);
 
-  // output bandpass
-  FILE *fout{nullptr};
-  float *h_bpout{nullptr};
-  char fnam[200];
-  if (p->output_bandpass>0)
-  {
-    h_bpout = (float *)malloc(sizeof(float)*NBATCH*NCHAN);
-    sprintf(fnam,"/home/ubuntu/data/bpout_%d.tmp",p->output_bandpass);
-    fout=fopen(fnam,"w");
-  }
-
-  // loop over batches
   for (uint64_t batch = 0; batch < nBatches; batch++)
   {
-    // load a batch
-    //printf("transpose input %d of %d\n",batch+1,nBatches);
     begin = clock();
-    transpose_input_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
+    spdlog::trace("hella::fast_flagger transpose_input_handler");
+    transpose_input_handler(p, p->d_gulp + p->gulp_nbyte * batch * NBATCH * NCHAN * p->gulp, p->batch, p->gulp, p->batch_stride);
     end = clock();
-    p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
+    p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC; 
 
-    // output init bandpass
-    if (p->output_bandpass>0)
-    {
-      begin = clock();
-      calc_bandpass_new<<<NCHAN*NBATCH/8,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
-      checkCuda(cudaMemcpy(h_bpout,p->d_bpout,NBATCH*NCHAN*4,cudaMemcpyDeviceToHost));
-      for (int i=0;i<NBATCH*NCHAN;i++)
-        fprintf(fout,"%g\n",h_bpout[i]);
-      end = clock();
-      p->t8 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
-    }
-
-    // bandpass flag / correct [uses h and d scratch]
-    mn_bp[batch] = bandpass_flag(p,p->batch);
-
+    mn_bp[batch] = bandpass_flag(p,p->batch, p->gulp);
     // loop over scrunches
     for (int scrnch=0;scrnch<p->nscrunches;scrnch++)
     {
-      tmp = apply_scrunch(p, p->batch, p->mask, p->d_smooth, p->d_ts, p->NTIME, p->batch_stride, p->scrunches[scrnch].tscrunch,p->scrunches[scrnch].fscrunch, p->scrunches[scrnch].thresh,1,0,p->d_flagSpec,p->flag1,p->flag2);
+      apply_scrunch(
+        p, 
+        p->batch, 
+        p->mask, 
+        p->d_smooth, 
+        p->d_ts, 
+        p->NTIME, 
+        p->batch_stride, 
+        p->scrunches[scrnch].tscrunch,
+        p->scrunches[scrnch].fscrunch, 
+        p->scrunches[scrnch].thresh,
+        1, // flag
+        0, // ts
+        p->d_flagSpec,
+        p->flag1,
+        p->flag2
+      );
       checkCuda(cudaDeviceSynchronize());
     }
-    tmp = apply_scrunch(p, p->batch, p->mask, p->d_smooth, p->d_ts, p->NTIME, p->batch_stride, 8, 8, 100., 0, 1, p->d_flagSpec,p->flag1,p->flag2);
+    apply_scrunch(
+      p,
+      p->batch,
+      p->mask,
+      p->d_smooth,
+      p->d_ts,
+      p->gulp,
+      p->batch_stride,
+      8,    // tscrunch
+      8,    // fscrunch
+      100,  // thresh
+      0,    // flag
+      1,    // ts
+      p->d_flagSpec,
+      p->flag1,
+      p->flag2
+    );
 
-    checkCuda(cudaDeviceSynchronize());
-
-    // output final bandpass
-    if (p->output_bandpass>0)
-    {
-      begin = clock();
-      calc_bandpass<<<NCHAN*NBATCH,256>>>(p->batch, p->d_bpout, p->NTIME, p->batch_stride);
-      cudaMemcpy(h_bpout,p->d_bpout,NBATCH*NCHAN*4,cudaMemcpyDeviceToHost);
-      for (int i=0;i<NBATCH*NCHAN;i++)
-        fprintf(fout,"%g\n",h_bpout[i]);
-      end = clock();
-      p->t8 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
-    }
-
-    // unload the batch
     begin = clock();
-    transpose_output_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch,p->NTIME,p->batch_stride);
-    cudaMemcpy(p->h_flagSpec,p->d_flagSpec,4*NBATCH*NCHAN,cudaMemcpyDeviceToHost);
+    spdlog::trace("hella::fast_flagger transpose_output_handler");
+    transpose_output_handler(p, p->d_data+batch*NBATCH*NCHAN*p->NTIME,p->batch);
+    checkCuda(cudaMemcpy(p->h_flagSpec,p->d_flagSpec,sizeof(float)*NBATCH*NCHAN,cudaMemcpyDeviceToHost));
     end = clock();
     p->t7 += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
   }
-
-  std::ostringstream oss;
-  for (unsigned i=0; i<nBatches; i++)
-  {
-    oss << " " << mn_bp[i];
-  }
-  spdlog::debug("fastflagger {}", oss.str());
-
-  if (p->output_bandpass>0)
-  {
-    sprintf(fnam,"mv /home/ubuntu/data/bpout_%d.tmp /home/ubuntu/data/bpout_%d.out",p->output_bandpass,p->output_bandpass);
-    system(fnam);
-    fclose(fout);
-    free(h_bpout);
-  }
+  
 }

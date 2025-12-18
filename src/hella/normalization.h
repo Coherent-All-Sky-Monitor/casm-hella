@@ -15,34 +15,22 @@
 
 namespace hella
 {
+
   /**
-   * @brief Host function to orchestrate the normalization process on half input
+   * @brief Host function to calculate the standard deviation of a 2D array of values in device memory. Accepts either fp16 or fp32 data
    *
    * @note uses h_scratch and d_scratch
    *
-   * @param p
-   * @param data
-   * @param width
-   * @param height
-   * @param stride
-   * @return float
-   */
-  float calculate_stddev(hella::pinfo_t *p, half * data, int width, int height, int stride);
-
-  /**
-   * @brief Host function to orchestrate the normalization process on float32 input
+   * @param p pointer to problem info struct 
+   * @param data pointer to device memory buffer
+   * @param width the width of the array in elements
+   * @param height the height of the array in elements
+   * @param stride the stride between rows of the array in elements
    *
-   * @note uses h_scratch and d_scratch
-   *
-   * @param p
-   * @param data
-   * @param width
-   * @param height
-   * @param stride
-   * @return float
+   * @return the standard deviation calculated over all values in the array
    */
-  float calculate_stddev_float(hella::pinfo_t *p, float * data, int width, int height, int stride);
-
+  template <typename T>
+  float calculate_stddev(hella::pinfo_t *p, T * data, int width, int height, int stride);
 } // namespace hella
 
 #endif // HELLA_NORMALIZATION_H

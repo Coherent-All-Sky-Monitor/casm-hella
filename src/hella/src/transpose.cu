@@ -84,60 +84,62 @@ void hella::transpose_input_handler(hella::pinfo_t* p, unsigned char * d_data, h
 
   dim3 dimBlockIn(32, 8), dimGridIn(NCHAN/32, width/32);
 
-  const size_t required_size = sizeof(half) * NCHAN * width;
-  hella::lock_d_scratch(p, required_size);
-
-  // do transpose by beam
-  for (uint64_t bm=0; bm<NBATCH; bm++)
+  if (p->inp_format == 0) // Gulps are FT ordered fp16 for DADA, which is what the flagging pipeline expects anyway, so we can just grab a batch directly
   {
-    transpose_input<<<dimGridIn,dimBlockIn>>>(
-      d_data+bm*NCHAN*width,
-      reinterpret_cast<half*>(p->d_scratch),
-      width
-    );
-    checkCuda(cudaMemcpy2D(
-      batch+bm*NCHAN*stride,
-      stride*sizeof(half),
-      reinterpret_cast<half*>(p->d_scratch),
-      width*sizeof(half),
-      width*sizeof(half),
-      NCHAN,
-      cudaMemcpyDeviceToDevice
-    ));
+    checkCuda(cudaMemcpy(batch, d_data, sizeof(half) * NCHAN * width * NBATCH, cudaMemcpyDeviceToDevice));
   }
-  hella::unlock_d_scratch(p);
+  else // Gulps are TF ordered u8 for filterbank input, so we need to transpose and convert before passing to the flagger
+  {
+    const size_t required_size = sizeof(half) * NCHAN * width;
+    hella::lock_d_scratch(p, required_size);
+
+    // do transpose by beam
+    for (uint64_t bm=0; bm<NBATCH; bm++)
+    {
+      transpose_input<<<dimGridIn,dimBlockIn>>>(
+        d_data+bm*NCHAN*width,
+        reinterpret_cast<half*>(p->d_scratch),
+        width
+      );
+      checkCuda(cudaMemcpy2D(
+        batch+bm*NCHAN*stride,
+        stride*sizeof(half),
+        reinterpret_cast<half*>(p->d_scratch),
+        width*sizeof(half),
+        width*sizeof(half),
+        NCHAN,
+        cudaMemcpyDeviceToDevice
+      ));
+    }
+    hella::unlock_d_scratch(p);
+  }
 
   checkCuda(cudaDeviceSynchronize());
 }
 
-void hella::transpose_output_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch, int width, int stride)
+void hella::transpose_output_handler(hella::pinfo_t* p, unsigned char * d_data, half * batch)
 {
-  dim3 dimBlockOut(32, 8), dimGridOut(width/32, NCHAN/32);
-  const size_t nval = NCHAN * width;
-  size_t required_size = sizeof(half) * nval;
-  hella::lock_d_scratch(p, required_size);
-  auto tmp = reinterpret_cast<half*>(p->d_scratch);
+  const size_t batch_width = p->gulp;
+  const size_t batch_height = NCHAN;
+  const size_t batch_nval = batch_width * batch_height;
+  const size_t data_width = NCHAN;
+  const size_t data_height = p->NTIME;
+  const size_t data_nval = data_width * data_height;
+
+  assert(batch_width % 32 == 0);
+
+  dim3 dimBlockOut(32, 8), dimGridOut(batch_width/32, batch_height/32);
 
   // do transpose by beam
   for (int bm=0; bm<NBATCH; bm++)
   {
-    checkCuda(cudaMemcpy2D(
-      tmp,
-      width*sizeof(half),
-      batch+bm*NCHAN*stride,
-      stride*sizeof(half),
-      width*sizeof(half),
-      NCHAN,
-      cudaMemcpyDeviceToDevice
-    ));
-
+    // Transpose the beam into the last p->gulp time samples in the output data buffer, downcasting from fp16 to uint8 along the way
     transpose_output<<<dimGridOut,dimBlockOut>>>(
-      d_data + (bm * nval),
-      tmp,
-      width
+      d_data + (bm * data_nval) + data_width * (data_height - batch_width),
+      batch + bm * batch_nval,
+      batch_width
     );
   }
-  hella::unlock_d_scratch(p);
 
   checkCuda(cudaDeviceSynchronize());
 }

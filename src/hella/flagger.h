@@ -31,11 +31,12 @@ namespace hella
    *
    * @note used h and d scratch
    *
-   * @param p
-   * @param data
+   * @param p pointer to problem info struct
+   * @param data data to flag
+   * @param width width of the data array in elements
    * @return float
    */
-  float bandpass_flag(hella::pinfo_t * p, half * data);
+  float bandpass_flag(hella::pinfo_t * p, half * data, int width);
 
   //! function to bandpass-correct data [uses h and d scratch]
   float bandpass_correct(hella::pinfo_t* p, half * data, int width, int stride);

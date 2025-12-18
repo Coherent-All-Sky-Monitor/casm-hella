@@ -15,192 +15,149 @@
 
 namespace {
 
-  // each block will compute the sums and qsums for a row
-  __global__ void sumArray(const half * data, float * sums, float * qsums, int width, int stride)
+  // Compute the per-row means of an image. Launch with 256 threads per threadblock, and a threadblock per row
+  template <typename T>
+  __global__ void computeRowMeans(const T *data, float *row_means, int width, int stride)
   {
+    static constexpr unsigned cols_per_block{256};
+    assert(cols_per_block == blockDim.x);
+
     unsigned idx = blockIdx.x * stride + threadIdx.x;
-    __shared__ float2 sdata[512];
 
-    // each thread computes a stride sum and qsum
-    __half2 s = make_half2(0.0f, 0.0f);
-    for (unsigned i=threadIdx.x; i<width; i+=blockDim.x, idx+=blockDim.x)
+    __shared__ float row_vals[cols_per_block];
+    row_vals[threadIdx.x] = 0;
+    __syncthreads();
+
+    while(idx < blockIdx.x * stride + width)
     {
-      const half val = data[idx];
-      s.x += val;
-      s.y += val * val;
+      const float val = static_cast<float>(data[idx]);
+      row_vals[threadIdx.x] += val;
+
+      idx += cols_per_block;
     }
 
-    // assign the stride sum to shared memory, converting to a float
-    sdata[threadIdx.x] = __half22float2(s);
     __syncthreads();
 
-    if (threadIdx.x < 256) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 256].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 256].y;
-    }
+    // Sum within each warp
+    const int lane_id = threadIdx.x & (warpSize - 1);
+
+    float partial_sum = row_vals[threadIdx.x];
+    
+    for (int i = warpSize/2; i >= 1; i /= 2)
+      partial_sum += __shfl_down_sync(0xffffffff, partial_sum, i, warpSize);
+
     __syncthreads();
 
-    if (threadIdx.x < 128) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 128].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 128].y;
+    // Write each warp sum back to shared mem
+    const int warp_id = threadIdx.x / warpSize;
+
+    if(lane_id == 0)
+    {
+      row_vals[warp_id] = partial_sum;
     }
+
     __syncthreads();
 
-    if (threadIdx.x < 64) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 64].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 64].y;
-    }
-    __syncthreads();
-
-    if (threadIdx.x < 32) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 32].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 32].y;
-    }
-    __syncthreads();
-
-    if (threadIdx.x < 32) {
-      // Ensure all threads in the warp are active for __shfl_down_sync
-      unsigned int mask = __activemask();
-      for (int offset = 16; offset > 0; offset >>= 1) {
-        sdata[threadIdx.x].x += __shfl_down_sync(mask, sdata[threadIdx.x].x, offset);
-        sdata[threadIdx.x].y += __shfl_down_sync(mask, sdata[threadIdx.x].y, offset);
-      }
-    }
-
+    // Perform the final sum on the first thread
     if (threadIdx.x == 0)
     {
-      sums[blockIdx.x] = sdata[threadIdx.x].x;
-      qsums[blockIdx.x] = sdata[threadIdx.x].y;
+      const int n_warp = cols_per_block / warpSize;
+      for (int i = 1; i < n_warp; i++)
+        partial_sum += row_vals[i];
+      row_means[blockIdx.x] = partial_sum / width;
     }
   }
 
-  // kernel to sum array and its squares
-  __global__ void sumArrayFloat(float * data, float * sums, float * qsums, int width, int stride)
+  // Compute the per-row variance of an image. Launch with 256 threads per threadblock, and a threadblock per row
+  template <typename T>
+  __global__ void computeRowVariances(const T *data, float *row_vars, float mean, int width, int stride)
   {
+    static constexpr unsigned cols_per_block{256};
+    assert(cols_per_block == blockDim.x);
+
     unsigned idx = blockIdx.x * stride + threadIdx.x;
-    __shared__ float2 sdata[512];
 
-    // each thread computes a stride sum and qsum
-    float2 s = make_float2(0.0f, 0.0f);
-    for (unsigned i=threadIdx.x; i<width; i+=blockDim.x, idx+=blockDim.x)
+    __shared__ float row_vals[cols_per_block];
+    row_vals[threadIdx.x] = 0;
+    __syncthreads();
+
+    while(idx < blockIdx.x * stride + width)
     {
-      const float val = data[idx];
-      s.x += val;
-      s.y += val * val;
+      const float val = static_cast<float>(data[idx]) - mean;
+      row_vals[threadIdx.x] += val * val;
+
+      idx += cols_per_block;
     }
 
-    // assign the stride sum to shared memory, converting to a float
-    sdata[threadIdx.x] = s;
     __syncthreads();
 
-    if (threadIdx.x < 256) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 256].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 256].y;
-    }
+    // Sum within each warp
+    const int lane_id = threadIdx.x & (warpSize - 1);
+
+    float partial_sum = row_vals[threadIdx.x];
+    
+    for (int i = warpSize/2; i >= 1; i /= 2)
+      partial_sum += __shfl_down_sync(0xffffffff, partial_sum, i, warpSize);
+
     __syncthreads();
 
-    if (threadIdx.x < 128) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 128].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 128].y;
+    // Write each warp sum back to shared mem
+    const int warp_id = threadIdx.x / warpSize;
+
+    if(lane_id == 0)
+    {
+      row_vals[warp_id] = partial_sum;
     }
+
     __syncthreads();
 
-    if (threadIdx.x < 64) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 64].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 64].y;
-    }
-    __syncthreads();
-
-    if (threadIdx.x < 32) {
-      sdata[threadIdx.x].x += sdata[threadIdx.x + 32].x;
-      sdata[threadIdx.x].y += sdata[threadIdx.x + 32].y;
-    }
-    __syncthreads();
-
-    if (threadIdx.x < 32) {
-      // Ensure all threads in the warp are active for __shfl_down_sync
-      unsigned int mask = __activemask();
-      for (int offset = 16; offset > 0; offset >>= 1) {
-        sdata[threadIdx.x].x += __shfl_down_sync(mask, sdata[threadIdx.x].x, offset);
-        sdata[threadIdx.x].y += __shfl_down_sync(mask, sdata[threadIdx.x].y, offset);
-      }
-    }
-
+    // Perform the final sum on the first thread
     if (threadIdx.x == 0)
     {
-      sums[blockIdx.x] = sdata[threadIdx.x].x;
-      qsums[blockIdx.x] = sdata[threadIdx.x].y;
+      const int n_warp = cols_per_block / warpSize;
+      for (int i = 1; i < n_warp; i++)
+        partial_sum += row_vals[i];
+      row_vars[blockIdx.x] = partial_sum / width;
     }
   }
-
 } // namespace anonymous
 
-float hella::calculate_stddev(hella::pinfo_t *p, half * data, int width, int height, int stride)
+template <typename T>
+float hella::calculate_stddev(hella::pinfo_t *p, T * data, int width, int height, int stride)
 {
-  int new_width = (int)(512*floor(width/512.));
-  int nblocks = height;
+  static constexpr unsigned cols_per_block{256};
+  const int new_width = static_cast<int>(cols_per_block * floor(width / cols_per_block));
+  const int nblocks = height;
 
-  const size_t sums_size = sizeof(float) * height;
-  hella::lock_d_scratch(p, sums_size * 2);
-  auto d_sums = reinterpret_cast<float*>(p->d_scratch);
-  auto d_qsums = d_sums + nblocks;
+  const size_t row_out_size = sizeof(float) * height;
+  hella::lock_d_scratch(p, row_out_size);
+  hella::lock_h_scratch(p, row_out_size);
+  computeRowMeans<<<nblocks, cols_per_block>>>(data, reinterpret_cast<float *>(p->d_scratch), new_width, stride);
+  checkCuda(cudaMemcpy(p->h_scratch, p->d_scratch, row_out_size, cudaMemcpyDeviceToHost));
 
-  sumArray<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,stride);
+  auto row_means = reinterpret_cast<float *>(p->h_scratch);
+  float mean = 0;
+  for (int i = 0; i < height; i++)
+    mean += row_means[i];
+  mean /= height;
 
-  hella::lock_h_scratch(p, sums_size * 2);
-  auto sums = reinterpret_cast<float*>(p->h_scratch);
-  auto qsums = sums + nblocks;
+  computeRowVariances<<<nblocks, cols_per_block>>>(data, reinterpret_cast<float *>(p->d_scratch), mean, new_width, stride);
+  checkCuda(cudaMemcpy(p->h_scratch, p->d_scratch, row_out_size, cudaMemcpyDeviceToHost));
 
-  checkCuda(cudaMemcpy(sums, d_sums, sums_size, cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(qsums, d_qsums, sums_size, cudaMemcpyDeviceToHost));
+  auto row_vars = reinterpret_cast<float *>(p->h_scratch);
+  float var = 0;
+  for (int i = 0; i < height; i++)
+    var += row_vars[i];
+  var /= height;
 
-  float sum=0., qsum=0.;
-  for (int i=0;i<nblocks;i++) {
-    sum += sums[i];
-    qsum += qsums[i];
-  }
-  float mn = sum/(new_width*height*1.);
-
-  float stdDev = qsum-2.*sum*mn+mn*mn*new_width*height*1.;
-  stdDev /= 1.*new_width*height;
-  stdDev = sqrt(stdDev);
+  const float stddev = sqrtf(var);
 
   hella::unlock_d_scratch(p);
   hella::unlock_h_scratch(p);
-
-  return stdDev;
+  
+  return stddev;
 }
 
-float hella::calculate_stddev_float(hella::pinfo_t *p, float * data, int width, int height, int stride)
-{
-  int new_width = static_cast<int>(512*floor(width/512.));
-  int nblocks = height;
+template float hella::calculate_stddev<half>(hella::pinfo_t *p, half * data, int width, int height, int stride);
+template float hella::calculate_stddev<float>(hella::pinfo_t *p, float * data, int width, int height, int stride);
 
-  const size_t sums_size = sizeof(float) * height;
-  hella::lock_d_scratch(p, sums_size * 2);
-  auto d_sums = reinterpret_cast<float*>(p->d_scratch);
-  auto d_qsums = d_sums + nblocks;
-  sumArrayFloat<<<nblocks,512>>>(data,d_sums,d_qsums,new_width,stride);
-
-  hella::lock_h_scratch(p, sums_size * 2);
-  auto sums = reinterpret_cast<float*>(p->h_scratch);
-  auto qsums = sums + nblocks;
-  checkCuda(cudaMemcpy(sums,d_sums,sums_size,cudaMemcpyDeviceToHost));
-  checkCuda(cudaMemcpy(qsums,d_qsums,sums_size,cudaMemcpyDeviceToHost));
-
-  float sum=0., qsum=0.;
-  for (int i=0;i<nblocks;i++) {
-    sum += sums[i];
-    qsum += qsums[i];
-  }
-  float mn = sum/(new_width*height*1.);
-
-  float stdDev = qsum-2.*sum*mn+mn*mn*new_width*height*1.;
-  stdDev /= 1.*new_width*height;
-  stdDev = sqrt(stdDev);
-
-  hella::unlock_d_scratch(p);
-  hella::unlock_h_scratch(p);
-
-  return stdDev;
-}
