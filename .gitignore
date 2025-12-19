@@ -63,3 +63,4 @@ docs/html
 .clangd
 test
 .cache/
+__pycache__/
