@@ -195,11 +195,11 @@ namespace
 void hella::normalize_data(hella::pinfo_t* p, half * data, int width, int stride)
 {
   // note: uses h and d scratch
-  float stdDev = hella::calculate_stddev(p, data, width, NBATCH*NCHAN, stride);
-  spdlog::trace("hella::normalize_data calculated standard deviation = {}", stdDev);
+  float mean{};
+  float stdDev = hella::calculate_stddev(p, data, width, NBATCH*NCHAN, stride, &mean);
 
   int nt = 512;
-  half c = __float2half(-1);
+  half c = __float2half(-mean);
   half m = __float2half(1.f/stdDev);
 
   dim3 gridDim(width/nt, NBATCH*NCHAN, 1);
@@ -367,7 +367,7 @@ void hella::fast_flagger(hella::pinfo_t *p)
         p->mask, 
         p->d_smooth, 
         p->d_ts, 
-        p->NTIME, 
+        p->gulp, 
         p->batch_stride, 
         p->scrunches[scrnch].tscrunch,
         p->scrunches[scrnch].fscrunch, 

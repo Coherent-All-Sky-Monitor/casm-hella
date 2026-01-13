@@ -123,7 +123,7 @@ namespace {
 } // namespace anonymous
 
 template <typename T>
-float hella::calculate_stddev(hella::pinfo_t *p, T * data, int width, int height, int stride)
+float hella::calculate_stddev(hella::pinfo_t *p, T * data, int width, int height, int stride, float *mean_ret)
 {
   static constexpr unsigned cols_per_block{256};
   const int new_width = static_cast<int>(cols_per_block * floor(width / cols_per_block));
@@ -154,10 +154,14 @@ float hella::calculate_stddev(hella::pinfo_t *p, T * data, int width, int height
 
   hella::unlock_d_scratch(p);
   hella::unlock_h_scratch(p);
+
+  if (mean_ret)
+    *mean_ret = mean;
   
   return stddev;
 }
 
-template float hella::calculate_stddev<half>(hella::pinfo_t *p, half * data, int width, int height, int stride);
-template float hella::calculate_stddev<float>(hella::pinfo_t *p, float * data, int width, int height, int stride);
+template float hella::calculate_stddev<half>(hella::pinfo_t *p, half * data, int width, int height, int stride, float *mean_ret);
+template float hella::calculate_stddev<float>(hella::pinfo_t *p, float * data, int width, int height, int stride, float *mean_ret);
+template float hella::calculate_stddev<uint8_t>(hella::pinfo_t *p, uint8_t * data, int width, int height, int stride, float *mean_ret);
 

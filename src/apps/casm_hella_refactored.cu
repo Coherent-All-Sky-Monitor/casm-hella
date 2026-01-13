@@ -630,6 +630,7 @@ int main(int argc, char *argv[]) try
   if (p.inp_format!=1)
     samp = -(p.NTIME-p.gulp) + (int)(p.maxWidth)/2;
   int gulp = 0;
+  const int min_gulp = p.NTIME / p.gulp; // Index of the first gulp which will have a full rewind buffer to search
 
   //measure_thresholds(&p);
 
@@ -701,7 +702,7 @@ int main(int argc, char *argv[]) try
     end = clock();
     flagt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
-    if ((gulp>0 && p.inp_format!=1) || (p.inp_format==1))
+    if ((gulp>=min_gulp && p.inp_format!=1) || (p.inp_format==1))
     {
       // deal with flags
       for (int j=0;j<NBATCH;j++)
@@ -738,6 +739,11 @@ int main(int argc, char *argv[]) try
 
         tot_time = readt+flagt+dedispt+smootht+peakt;
         bm += 1;
+      }
+
+      if (bm < NBEAMS)
+      {
+        spdlog::warn("Only processed {}/{} beams - detected {} peaks", bm, NBEAMS, p.out_npeaks);
       }
 
       begin = clock();

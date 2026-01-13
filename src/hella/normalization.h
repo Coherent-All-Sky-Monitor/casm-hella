@@ -26,11 +26,12 @@ namespace hella
    * @param width the width of the array in elements
    * @param height the height of the array in elements
    * @param stride the stride between rows of the array in elements
+   * @param[out] mean_ret pointer to storage for computed mean. May be null. 
    *
    * @return the standard deviation calculated over all values in the array
    */
   template <typename T>
-  float calculate_stddev(hella::pinfo_t *p, T * data, int width, int height, int stride);
+  float calculate_stddev(hella::pinfo_t *p, T * data, int width, int height, int stride, float *mean_ret = nullptr);
 } // namespace hella
 
 #endif // HELLA_NORMALIZATION_H
