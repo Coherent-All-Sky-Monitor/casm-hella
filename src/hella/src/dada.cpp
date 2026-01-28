@@ -8,7 +8,8 @@
 
 #include "hella/dada.h"
 
-#include "ipcbuf.h"
+#include <ipcbuf.h>
+#include <dada_cuda.h>
 #include <spdlog/spdlog.h>
 
 dada_hdu_t* hella::hdu_connect_read(hella::pinfo_t* p)
@@ -29,8 +30,8 @@ dada_hdu_t* hella::hdu_connect_read(hella::pinfo_t* p)
   dada_hdu_connect(hdu);
   dada_hdu_lock_read(hdu);
 
-  // page all of the input data block buffers into RAM
-  ipcbuf_page(reinterpret_cast<ipcbuf_t*>(hdu->data_block));
+  spdlog::trace("Registering data block with CUDA driver");
+  dada_cuda_dbregister(hdu);
 
   header_in = ipcbuf_get_next_read(hdu->header_block, &header_size);
   ipcbuf_mark_cleared(hdu->header_block);

@@ -187,9 +187,14 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   if (p->out_format != 1)
     spdlog::info("Outputting to text file {}",p->out_path);
 
+  if (DEBUG_ALWAYS_FIND_PEAKS)
+  {
+    spdlog::warn("Standard deviation thresholds will be ignored during peak-finding");
+  }
+
   // set up DM plan
-  spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
-  dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
+  spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CHAN0_FREQ/1e6,FREQ_CHANNEL_WIDTH);
+  dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CHAN0_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   // generate DM list
   dedisp_generate_dm_list(p->dedispersion_plan,p->minDM,p->maxDM,40,TOL);
   p->DMs = dedisp_get_dm_list(p->dedispersion_plan);
@@ -229,9 +234,19 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   hella::alloc_gpu<float>(&p->d_dedispPacked, p->ndms * p->ntime_dedisp);
   hella::alloc_gpu<unsigned char>(&p->d_inputPacked, p->NTIME * NCHAN);
   hella::alloc_gpu<unsigned char>(&p->d_data, p->NTIME * NBEAMS * NCHAN);
+  if (p->inp_format == 0) // DADA input, gulps are fp16 FT ordered
+  {
+    p->gulp_nbyte = sizeof(half);
+    hella::alloc_gpu<half>(reinterpret_cast<half **>(&p->d_gulp), p->gulp * NBEAMS * NCHAN);
+  }
+  else // Otherwise gulps are u8 TF ordered
+  {
+    p->gulp_nbyte = sizeof(unsigned char);
+    hella::alloc_gpu<unsigned char>(&p->d_gulp, p->gulp * NBEAMS * NCHAN); 
+  }
 
-  hella::alloc_gpu_pitch<half>(&p->batch, reinterpret_cast<size_t*>(&p->batch_stride), p->NTIME, NBATCH * NCHAN);
-  hella::alloc_gpu_pitch<half>(&p->mask, reinterpret_cast<size_t*>(&p->batch_stride), p->NTIME, NBATCH * NCHAN);
+  hella::alloc_gpu_pitch<half>(&p->batch, reinterpret_cast<size_t*>(&p->batch_stride), p->gulp, NBATCH * NCHAN);
+  hella::alloc_gpu_pitch<half>(&p->mask, reinterpret_cast<size_t*>(&p->batch_stride), p->gulp, NBATCH * NCHAN);
   p->batch_stride = p->batch_stride / sizeof(half);
 
   hella::alloc_gpu<half>(&p->d_smooth, p->batch_stride * NBATCH * NCHAN);
@@ -615,6 +630,7 @@ int main(int argc, char *argv[]) try
   if (p.inp_format!=1)
     samp = -(p.NTIME-p.gulp) + (int)(p.maxWidth)/2;
   int gulp = 0;
+  const int min_gulp = p.NTIME / p.gulp; // Index of the first gulp which will have a full rewind buffer to search
 
   //measure_thresholds(&p);
 
@@ -666,40 +682,28 @@ int main(int argc, char *argv[]) try
     const size_t beam_time_stride = p.NTIME * NCHAN;
     const size_t beam_gulp_stride = p.gulp * NCHAN;
     const size_t beam_rewind_stride = (p.NTIME - p.gulp) * NCHAN;
-    // loop over beams to read in data
+    // read in data
     begin = clock();
-    for (int bmm=0;bmm<NBEAMS;bmm++)
+
+    if (p.inp_format==0) // DADA input - fp16
     {
-      // get data from reader
-
-      // dada input
-      if (p.inp_format==0) {
-        memcpy(p.data + beam_time_stride*bmm + beam_rewind_stride, block + beam_gulp_stride*(bmm+p.BEAM_OFFSET), beam_gulp_stride);
-        memcpy(p.data + beam_time_stride*bmm, p.rewinds + beam_rewind_stride*bmm, beam_rewind_stride);
-        memcpy(p.rewinds + beam_rewind_stride*bmm, p.data + beam_time_stride*bmm + beam_gulp_stride, beam_rewind_stride);
-      }
-
-      // filterbank input
-      if (p.inp_format==2) {
-        memcpy(p.data + beam_time_stride*bmm + beam_rewind_stride,sigproc_buf + beam_gulp_stride*(bmm+p.BEAM_OFFSET), beam_gulp_stride);
-        memcpy(p.data + beam_time_stride*bmm, p.rewinds + beam_rewind_stride*bmm, beam_rewind_stride);
-        memcpy(p.rewinds + beam_rewind_stride*bmm, p.data + beam_time_stride*bmm + beam_gulp_stride, beam_rewind_stride);
-      }
+      checkCuda(cudaMemcpy(p.d_gulp, block, NBEAMS * beam_gulp_stride * sizeof(half), cudaMemcpyHostToDevice));
     }
-
-    // copy to device
-    size_t bytes_to_copy = sizeof(unsigned char) * p.NTIME * NBEAMS * NCHAN;
-    checkCuda(cudaMemcpy(p.d_data,p.data,bytes_to_copy,cudaMemcpyHostToDevice));
+    else if (p.inp_format==2) // filterbank input - u8
+    {
+      checkCuda(cudaMemcpy(p.d_gulp, sigproc_buf, NBEAMS * beam_gulp_stride, cudaMemcpyHostToDevice));
+    }
     end = clock();
     readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
-    if ((gulp>0 && p.inp_format!=1) || (p.inp_format==1))
+    begin = clock();
+    // flag the input gulp, storing the result in d_data
+    hella::fast_flagger(&p);
+    end = clock();
+    flagt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
+
+    if ((gulp>=min_gulp && p.inp_format!=1) || (p.inp_format==1))
     {
-      begin = clock();
-
-      // perform in-place flagging of the input data
-      hella::fast_flagger(&p);
-
       // deal with flags
       for (int j=0;j<NBATCH;j++)
       {
@@ -710,9 +714,6 @@ int main(int argc, char *argv[]) try
           tot_flags += (1.*p.NTIME*p.h_flagSpec[j*NCHAN+i])/FLAG_NORMALIZATION_FACTOR;
         }
       }
-
-      end = clock();
-      flagt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
 
       // loop over beams to dedisperse and search
       // check time, out_npeaks
@@ -730,7 +731,7 @@ int main(int argc, char *argv[]) try
         hella::smooth(&p,1);
         end = clock();
         smootht += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
-
+        
         begin = clock();
         hella::find_peaks(&p,bm);
         end = clock();
@@ -738,6 +739,11 @@ int main(int argc, char *argv[]) try
 
         tot_time = readt+flagt+dedispt+smootht+peakt;
         bm += 1;
+      }
+
+      if (bm < NBEAMS)
+      {
+        spdlog::warn("Only processed {}/{} beams - detected {} peaks", bm, NBEAMS, p.out_npeaks);
       }
 
       begin = clock();
@@ -761,6 +767,34 @@ int main(int argc, char *argv[]) try
       if (socket_count==SOCKET_CADENCE)
         socket_count=0;
     }
+
+    // Rewind d_data in gulp-sized chunks
+
+    // Need to be careful at the boundary, since NTIME % gulp != 0 in general, so there will be one gulp that would be rewound to before
+    // the start of our buffer. The first `last_dat` samples in the newly rewound buffer will come from that gulp.
+    long last_dat = p.NTIME;
+    while (last_dat - static_cast<int>(p.gulp) > 0)
+      last_dat -= p.gulp;
+    spdlog::debug("First rewind chunk will fill up to last_dat={}", last_dat);
+
+    for (int ibeam = 0; ibeam < NBEAMS; ibeam++)
+    {
+      unsigned char *beam_data = p.d_data + ibeam * p.NTIME * NCHAN;
+
+      size_t load_dat = p.gulp;
+      size_t store_dat = 0;
+      checkCuda(cudaMemcpyAsync(beam_data + store_dat * NCHAN, beam_data + (load_dat * NCHAN), last_dat * NCHAN, cudaMemcpyDeviceToDevice));
+
+      store_dat = last_dat;
+      load_dat = store_dat + p.gulp;
+      while (load_dat <= p.NTIME-p.gulp)
+      {
+        checkCuda(cudaMemcpyAsync(beam_data + store_dat * NCHAN, beam_data + load_dat * NCHAN, p.gulp * NCHAN, cudaMemcpyDeviceToDevice));
+        store_dat += p.gulp;
+        load_dat = store_dat + p.gulp;
+      }
+    }
+    checkCuda(cudaDeviceSynchronize());
 
     // increment sample
     samp += p.gulp;

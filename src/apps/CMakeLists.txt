@@ -63,6 +63,7 @@ target_link_libraries(
 install(
   TARGETS
   casm_hella
+  casm_hella_refactored
   RUNTIME
   DESTINATION
   bin

@@ -34,11 +34,14 @@ const int MAXHOSTNAME = 200;
 const int MAXCONNECTIONS = 5;
 const int MAXRECV = 500;
 
-#define NMEDFILT 13
+// TODO(ldunn) bandpass median filtering temporarily disabled because we have some pretty huge spikes in the real data at the moment
+#define NMEDFILT 1
 #define NTSMED 7
-#define NBATCH 4
+// WARNING: the standard deviation used to normalise a batch of beams during flagging is calculated across the whole batch. 
+// If the variances of individual beams in a batch differ significantly, the normalisation will not be correct, and the distribution of values in the post-flagging beams can be heavily distorted
+#define NBATCH 1
 #define NCHAN 3072
-#define NBEAMS 128
+#define NBEAMS 1
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
@@ -50,7 +53,7 @@ const int MAXRECV = 500;
 
 // CASM frequency and timing parameters
 #define FREQ_CHANNEL_WIDTH -0.03075  // 0.03075 MHz
-#define CENTER_FREQ 500.0e6         // 450 MHz in Hz
+#define CHAN0_FREQ 500.0e6         // Upper band edge - 500 MHz in Hz
 #define TIME_RESOLUTION 1.0e-3      // 1 ms in seconds
 
 // Other configurable constants
@@ -59,22 +62,34 @@ const int MAXRECV = 500;
 #define PROCESSING_TIME_LIMIT 100.1   // time limit for processing in seconds, causes dedispersion to be skipped
 #define FLAG_NORMALIZATION_FACTOR 805306368.0  // normalization factor for flagging statistics
 
-// Statistical parameters for boxcar smoothing
-#define BOXCAR_MEAN 0.21368
+// Statistical parameters for boxcar smoothing (ldunn) I guess these have to be manually recomputed sometimes - they were somewhat wrong for the current configuration. Not sure what they actually depend on!
+// The current values were calcaluated by computing the means and standard deviations of the smoothed streams without the rescaling of smooth.cpp:89-110 applied. I don't remember what input data was used,
+// and these values should absolutely be revisited.
+//#define BOXCAR_MEAN 0.21368
+#define BOXCAR_MEAN 0.21358512
 // Individual standard deviation values for boxcar smoothing
-#define BOXCAR_STD_0 0.001309
-#define BOXCAR_STD_1 0.00124735
-#define BOXCAR_STD_2 0.00103835
-#define BOXCAR_STD_3 0.00081225
-#define BOXCAR_STD_4 0.00062605
-#define BOXCAR_STD_5 0.00047785
-#define BOXCAR_STD_6 0.00036005
+//#define BOXCAR_STD_0 0.001309
+#define BOXCAR_STD_0 0.0008018229
+//#define BOXCAR_STD_1 0.00124735
+#define BOXCAR_STD_1 0.00078224146
+//#define BOXCAR_STD_2 0.00103835
+#define BOXCAR_STD_2 0.00071913656
+//#define BOXCAR_STD_3 0.00081225
+#define BOXCAR_STD_3 0.0006578484
+//#define BOXCAR_STD_4 0.00062605
+#define BOXCAR_STD_4 0.0006130994
+//#define BOXCAR_STD_5 0.00047785
+#define BOXCAR_STD_5 0.00058116735
+//#define BOXCAR_STD_6 0.00036005
+#define BOXCAR_STD_6 0.0005584275
 
-// Threshold parameters
+// Threshold parameters 
+// TODO(ldunn) not obvious what these should be - the current values should be regarded as provisional
+#define DEBUG_ALWAYS_FIND_PEAKS 0 // Ignore the std. dev thresholds in the peak finding code. Intended for profiling with fake data
 #define TIME_SERIES_HIGH_THRESHOLD 1.05
 #define TIME_SERIES_LOW_THRESHOLD 0.95
 #define STD_DEV_LOW_THRESHOLD 1.2
-#define STD_DEV_VERY_LOW_THRESHOLD 0.96
+#define STD_DEV_VERY_LOW_THRESHOLD 0.1
 #define STD_DEV_HIGH_THRESHOLD 1.5
 #define STD_DEV_VERY_HIGH_THRESHOLD 0.92
 
@@ -135,7 +150,9 @@ typedef struct pinfo {
   int d_dedisp_step;
   float * d_dedispPacked{nullptr}; // dedisp output
   unsigned char * d_inputPacked{nullptr}; // dedisp input
-  unsigned char * d_data{nullptr}; // all the input
+  unsigned char *d_gulp{nullptr}; // gulp data pre-flagging - data type and order may vary: for DADA input this is fp16 SFT ordered, for filterbank input this is u8 STF ordered
+  size_t gulp_nbyte{}; // number of bytes per sample in the input gulp
+  unsigned char * d_data{nullptr}; // all the input *post-flagging* including rewind - u8, STF ordered
   half * batch{nullptr}, * mask{nullptr}, * d_smooth{nullptr};
   float * d_ts{nullptr};
   int batch_stride;
