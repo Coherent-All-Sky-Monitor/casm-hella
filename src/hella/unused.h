@@ -1,8 +1,8 @@
 /***************************************************************************
  *
- *   Copyright (C) 2025 TBA
+ *   Copyright (C) 2025 Vikram Ravi
  *   Copyright (C) 2025 Fourier Space
- *   Authors: TBA, Andrew Jameson
+ *   Authors: Vikram Ravi, Andrew Jameson
  *
  ***************************************************************************/
 
