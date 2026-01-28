@@ -41,7 +41,7 @@ const int MAXRECV = 500;
 // If the variances of individual beams in a batch differ significantly, the normalisation will not be correct, and the distribution of values in the post-flagging beams can be heavily distorted
 #define NBATCH 1
 #define NCHAN 3072
-#define NBEAMS 32
+#define NBEAMS 1
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
@@ -53,7 +53,7 @@ const int MAXRECV = 500;
 
 // CASM frequency and timing parameters
 #define FREQ_CHANNEL_WIDTH -0.03075  // 0.03075 MHz
-#define CENTER_FREQ 500.0e6         // 500 MHz in Hz
+#define CHAN0_FREQ 500.0e6         // Upper band edge - 500 MHz in Hz
 #define TIME_RESOLUTION 1.0e-3      // 1 ms in seconds
 
 // Other configurable constants
@@ -63,6 +63,8 @@ const int MAXRECV = 500;
 #define FLAG_NORMALIZATION_FACTOR 805306368.0  // normalization factor for flagging statistics
 
 // Statistical parameters for boxcar smoothing (ldunn) I guess these have to be manually recomputed sometimes - they were somewhat wrong for the current configuration. Not sure what they actually depend on!
+// The current values were calcaluated by computing the means and standard deviations of the smoothed streams without the rescaling of smooth.cpp:89-110 applied. I don't remember what input data was used,
+// and these values should absolutely be revisited.
 //#define BOXCAR_MEAN 0.21368
 #define BOXCAR_MEAN 0.21358512
 // Individual standard deviation values for boxcar smoothing
@@ -82,7 +84,7 @@ const int MAXRECV = 500;
 #define BOXCAR_STD_6 0.0005584275
 
 // Threshold parameters 
-// TODO(ldunn) not obvious what these should be
+// TODO(ldunn) not obvious what these should be - the current values should be regarded as provisional
 #define DEBUG_ALWAYS_FIND_PEAKS 0 // Ignore the std. dev thresholds in the peak finding code. Intended for profiling with fake data
 #define TIME_SERIES_HIGH_THRESHOLD 1.05
 #define TIME_SERIES_LOW_THRESHOLD 0.95

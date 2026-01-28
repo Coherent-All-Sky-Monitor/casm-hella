@@ -31,7 +31,7 @@ namespace hella
    *
    * @note used h and d scratch
    *
-   * @param p pointer to problem info struct
+   * @param p pointer to pipeline info struct
    * @param data data to flag
    * @param width width of the data array in elements
    * @return float

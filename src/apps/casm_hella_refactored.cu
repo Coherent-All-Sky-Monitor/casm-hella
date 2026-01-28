@@ -193,8 +193,8 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   }
 
   // set up DM plan
-  spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
-  dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CENTER_FREQ/1e6,FREQ_CHANNEL_WIDTH);
+  spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CHAN0_FREQ/1e6,FREQ_CHANNEL_WIDTH);
+  dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CHAN0_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   // generate DM list
   dedisp_generate_dm_list(p->dedispersion_plan,p->minDM,p->maxDM,40,TOL);
   p->DMs = dedisp_get_dm_list(p->dedispersion_plan);
@@ -770,7 +770,7 @@ int main(int argc, char *argv[]) try
 
     // Rewind d_data in gulp-sized chunks
 
-    // Need to be careful at the boundary, since NTIME % gulp != 0 in general, so there will be one gulp hich would be rewound to before
+    // Need to be careful at the boundary, since NTIME % gulp != 0 in general, so there will be one gulp that would be rewound to before
     // the start of our buffer. The first `last_dat` samples in the newly rewound buffer will come from that gulp.
     long last_dat = p.NTIME;
     while (last_dat - static_cast<int>(p.gulp) > 0)

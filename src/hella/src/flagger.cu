@@ -378,7 +378,6 @@ void hella::fast_flagger(hella::pinfo_t *p)
         p->flag1,
         p->flag2
       );
-      checkCuda(cudaDeviceSynchronize());
     }
     apply_scrunch(
       p,

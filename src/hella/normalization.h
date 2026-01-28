@@ -21,7 +21,7 @@ namespace hella
    *
    * @note uses h_scratch and d_scratch
    *
-   * @param p pointer to problem info struct 
+   * @param p pointer to pipeline info struct 
    * @param data pointer to device memory buffer
    * @param width the width of the array in elements
    * @param height the height of the array in elements

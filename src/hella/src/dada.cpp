@@ -8,8 +8,8 @@
 
 #include "hella/dada.h"
 
-#include "ipcbuf.h"
-#include "dada_cuda.h"
+#include <ipcbuf.h>
+#include <dada_cuda.h>
 #include <spdlog/spdlog.h>
 
 dada_hdu_t* hella::hdu_connect_read(hella::pinfo_t* p)
