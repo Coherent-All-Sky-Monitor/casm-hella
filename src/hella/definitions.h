@@ -41,7 +41,7 @@ const int MAXRECV = 500;
 // If the variances of individual beams in a batch differ significantly, the normalisation will not be correct, and the distribution of values in the post-flagging beams can be heavily distorted
 #define NBATCH 1
 #define NCHAN 3072
-#define NBEAMS 1
+#define NBEAMS 64
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
@@ -53,7 +53,7 @@ const int MAXRECV = 500;
 
 // CASM frequency and timing parameters
 #define FREQ_CHANNEL_WIDTH -0.03075  // 0.03075 MHz
-#define CHAN0_FREQ 500.0e6         // Upper band edge - 500 MHz in Hz
+#define CHAN0_FREQ 468.75e6         // Upper band edge in Hz
 #define TIME_RESOLUTION 1.0e-3      // 1 ms in seconds
 
 // Other configurable constants
