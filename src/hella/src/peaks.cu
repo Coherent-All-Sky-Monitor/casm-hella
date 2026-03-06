@@ -137,6 +137,25 @@ void hella::output_peaks(hella::pinfo_t *p, int samp, int restart_socket)
       throw std::runtime_error("failed to open output file for appending");
     }
 
+    // Write the header to the output file if there is no existing data
+    static const char *header_str = "SNR SAMP_START TIME_START WIDTH DM_IDX DM BEAM_IDX";
+    if (fseeko(fout, 0, SEEK_END) != 0)
+    {
+      spdlog::error("failed to seek to end of p->out_path={}", p->out_path);
+      throw std::runtime_error("failed to seek to end of output file");
+    }
+    auto file_sz = ftello(fout);
+    if (file_sz == -1)
+    {
+      spdlog::error("could not determine size of p->out_path={}", p->out_path);
+      throw std::runtime_error("could not determine size of output file");
+    }
+
+    if (file_sz == 0)
+    {
+      fprintf(fout, "%s\n", header_str);
+    }
+
     if (p->out_npeaks > 0)
       spdlog::debug("S/N SAMP TIME WIDTH DM_IDX DM BEAM");
 
@@ -148,7 +167,7 @@ void hella::output_peaks(hella::pinfo_t *p, int samp, int restart_socket)
       //   fprintf(fout,"A %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,262.144e-6*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]],bm);
       // else
       //   fprintf(fout,"B %g %d %g %d %d %g %d\n",p->peaks[i],p->samp[i]+samp,262.144e-6*(p->samp[i]+samp),p->width[i],p->dm_idx[i],p->DMs[p->dm_idx[i]],bm);
-      fprintf(fout,"%g %d %d %g %d %d %g %d\n",p->out_peaks[i],p->out_samp[i]+samp,p->out_samp[i]+samp,TIME_RESOLUTION*(p->out_samp[i]+samp)/SECONDS_PER_DAY,p->out_width[i],p->out_dm_idx[i],p->DMs[p->out_dm_idx[i]],p->out_beam[i]+p->BEAM0);
+      fprintf(fout,"%g %d %g %d %d %g %d\n",p->out_peaks[i],p->out_samp[i]+samp,TIME_RESOLUTION*(p->out_samp[i]+samp)/SECONDS_PER_DAY,p->out_width[i],p->out_dm_idx[i],p->DMs[p->out_dm_idx[i]],p->out_beam[i]+p->BEAM0);
 
     }
     fclose(fout);
@@ -193,7 +212,6 @@ void hella::output_peaks(hella::pinfo_t *p, int samp, int restart_socket)
       // record output
       for( int i=0; i<p->out_npeaks; i++ ) {
         oss << p->out_peaks[i] << " "
-            << p->out_samp[i]+samp << " "
             << p->out_samp[i]+samp << " "
             << TIME_RESOLUTION*(p->out_samp[i]+samp)/SECONDS_PER_DAY << " "
             << p->out_width[i] << " "
