@@ -47,7 +47,7 @@ def write_sigproc_header(fh, hdr: dict):
 # --------- Constants ---------
 nchans = 3072
 chan_bw_MHz = 0.03051757812
-fch1_MHz = 500.0                     # top-of-band frequency (channel 0), MHz
+fch1_MHz = 468.75                     # top-of-band frequency (channel 0), MHz
 foff_MHz = -chan_bw_MHz              # negative => descending frequency
 fref_MHz = fch1_MHz                  # reference (arrives at middle here)
 # Dispersion constant: t_delay(ms) = 4.148808 * DM * (1/nu^2 - 1/nu_ref^2), with nu in GHz
@@ -101,11 +101,12 @@ def make_config(input_type, input_fname, output_fname, base_config_fname, output
     output_file.flush()
 
 def gen_filterbank(
-        duration_samps=32768, 
+        duration_samps=8192, 
         noise_std=20.0, 
         DM=100.0, # pc cm^-3
         pulse_amp_counts=8.0, # additive amplitude (rough per-sample SNR ~ pulse_amp / noise_std)
-        output_fname_base="./"
+        output_fname_base="./",
+        with_noise=True
     ) -> Path:
 
     duration_s = duration_samps * tsamp_s                    # total length
@@ -140,7 +141,10 @@ def gen_filterbank(
             i1 = i0 + n - 1
 
             # 1) draw noise
-            block = rng.normal(noise_mean, noise_std, size=(n, nchans)).round().astype(np.float32)
+            if with_noise:
+                block = rng.normal(noise_mean, noise_std, size=(n, nchans)).round().astype(np.float32)
+            else:
+                block = np.zeros((n, nchans), dtype=np.float32)
 
             # 2) add FRB where the pulse overlaps this chunk
             # channels whose pulse center falls within [i0-halfwin, i1+halfwin]
@@ -197,12 +201,13 @@ if __name__ == "__main__":
     p.add_argument("--pulse_amp", type=str, help="Pulse amplitude. Can either by specified by a single value or a range of the form start:step:end", required=True)
     p.add_argument("--output", type=str, help="Output base filename", required=True)
     p.add_argument("--base_config", type=str, help="Template hella configuration", required=True)
+    p.add_argument("--no_noise", action='store_false', dest='with_noise', help="Do not include noise", required=False)
 
     args = p.parse_args()
 
     for DM in parse_range_str(args.DM):
         for pulse_amp in parse_range_str(args.pulse_amp):
-            fil_path = gen_filterbank(DM=DM, pulse_amp_counts=pulse_amp)
+            fil_path = gen_filterbank(DM=DM, pulse_amp_counts=pulse_amp,with_noise=args.with_noise)
 
             with open(fil_path.with_suffix(".fil_cfg"), 'w') as cfg_file:
                 make_config("FILTERBANK", fil_path.absolute(), fil_path.with_suffix(".fil_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)

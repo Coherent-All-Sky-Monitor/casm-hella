@@ -9,13 +9,15 @@ def load_fil_data(input: str):
     data_start = data.find(b"HEADER_END") + len("HEADER_END")
     return data[data_start:]
 
-def get_dada_header(data_nbytes: int):
+def get_dada_header(data_nbytes: int, gulp_nbytes: int, inj_beam: int):
     hdr_size = 4096
 
     file_size = data_nbytes
 
     hdr =   f"HDR_SIZE {hdr_size}\n" + \
             f"FILE_SIZE {file_size}\n" + \
+            f"RESOLUTION {gulp_nbytes}\n" + \
+            f"INJ_BEAM {inj_beam}\n" + \
             "UTC_START 2020-01-01-00:00:00\n" + \
             "OBS_OFFSET 0\n"
     hdr += "\0" * (hdr_size - len(hdr))
@@ -45,7 +47,8 @@ def convert_fil_to_dada(input, output, nchan, nbeam, ibeam, gulp_samps, transpos
     with open(output, 'wb') as f:
         idat = 0
         data_size = len(full_output.flatten()) * 2
-        f.write(get_dada_header(data_size).encode())
+        gulp_size = data_size // (ndat // gulp_samps)
+        f.write(get_dada_header(data_size, gulp_size, ibeam).encode())
 
         while (idat + gulp_samps <= ndat):
             print(f"Writing samples {idat}->{idat + gulp_samps}")
