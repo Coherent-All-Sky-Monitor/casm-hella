@@ -162,7 +162,7 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   fclose(fconf);
 
   // set GPU ID
-  cudaSetDevice(gpu_id);
+  checkCuda(cudaSetDevice(gpu_id));
   int current_device{-1};
   cudaGetDevice(&current_device);
   if (current_device != gpu_id)
