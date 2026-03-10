@@ -187,7 +187,10 @@ namespace
     int x = (int)(idx % width);
     int iidx = y*stride+x;
 
-    data[iidx] /= __float2half(bandpass[y]);
+    if (bandpass[y] > 0)
+      data[iidx] /= __float2half(bandpass[y]);
+    else
+      data[iidx] = 0;
   }
 
 } // namespace anonymous
