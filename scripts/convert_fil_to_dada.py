@@ -9,7 +9,7 @@ def load_fil_data(input: str):
     data_start = data.find(b"HEADER_END") + len("HEADER_END")
     return data[data_start:]
 
-def get_dada_header(data_nbytes: int, gulp_nbytes: int, inj_beam: int):
+def get_dada_header(data_nbytes: int, gulp_nbytes: int, inj_beam: int, nbit: int):
     hdr_size = 4096
 
     file_size = data_nbytes
@@ -18,13 +18,14 @@ def get_dada_header(data_nbytes: int, gulp_nbytes: int, inj_beam: int):
             f"FILE_SIZE {file_size}\n" + \
             f"RESOLUTION {gulp_nbytes}\n" + \
             f"INJ_BEAM {inj_beam}\n" + \
+            f"NBIT {nbit}\n" + \
             "UTC_START 2020-01-01-00:00:00\n" + \
             "OBS_OFFSET 0\n"
     hdr += "\0" * (hdr_size - len(hdr))
 
     return hdr
 
-def convert_fil_to_dada(input, output, nchan, nbeam, ibeam, gulp_samps, transpose, fp16): 
+def convert_fil_to_dada(input, output, nchan, nbeam, ibeam, hdr_injbeam, gulp_samps, transpose, fp16): 
     raw_data = load_fil_data(input)
     ndat = len(raw_data) // nchan
     print(f"Inferred {ndat} samples")
@@ -48,7 +49,8 @@ def convert_fil_to_dada(input, output, nchan, nbeam, ibeam, gulp_samps, transpos
         idat = 0
         data_size = len(full_output.flatten()) * 2
         gulp_size = data_size // (ndat // gulp_samps)
-        f.write(get_dada_header(data_size, gulp_size, ibeam).encode())
+        nbit = 16 if fp16 else 8
+        f.write(get_dada_header(data_size, gulp_size, hdr_injbeam, nbit).encode())
 
         while (idat + gulp_samps <= ndat):
             print(f"Writing samples {idat}->{idat + gulp_samps}")
@@ -71,10 +73,11 @@ if __name__ == "__main__":
     p.add_argument("--nchan", type=int, help="Number of frequency channels in filterbank", required=True)
     p.add_argument("--nbeam", type=int, help="Total number of beams in .dada file", required=True)
     p.add_argument("--ibeam", type=int, help="Beam to insert filterbank data into", required=True)
+    p.add_argument("--hdr_injbeam", type=int, help="Value of INJ_BEAM in DADA header [default=same as ibeam]")
     p.add_argument("--gulp_samps", type=int, help="Number of time samples per gulp (i.e. ring buffer element)", required=True)
     p.add_argument("--transpose", type=bool, default=True, help="Transpose each beam from TF to FT order")
     p.add_argument("--fp16", type=bool, default=True, help="Write output as fp16 instead of uint8")
     args = p.parse_args()
 
-    convert_fil_to_dada(args.input, args.output, args.nchan, args.nbeam, args.ibeam, args.gulp_samps, args.transpose, args.fp16)
+    convert_fil_to_dada(args.input, args.output, args.nchan, args.nbeam, args.ibeam, args.hdr_injbeam, args.gulp_samps, args.transpose, args.fp16)
 

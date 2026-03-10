@@ -200,8 +200,9 @@ if __name__ == "__main__":
     p.add_argument("--DM", type=str, help="Dispersion measure of the injected pulse. Can either by specified by a single value or a range of the form start:step:end", required=True)
     p.add_argument("--pulse_amp", type=str, help="Pulse amplitude. Can either by specified by a single value or a range of the form start:step:end", required=True)
     p.add_argument("--output", type=str, help="Output base filename", required=True)
-    p.add_argument("--base_config", type=str, help="Template hella configuration", required=True)
+    p.add_argument("--base_config", type=str, help="Template hella configuration", required=False)
     p.add_argument("--no_noise", action='store_false', dest='with_noise', help="Do not include noise", required=False)
+    p.add_argument("--no_config", action='store_false', dest='write_configs', help="Do not write hella configuration files", required=False)
 
     args = p.parse_args()
 
@@ -209,10 +210,11 @@ if __name__ == "__main__":
         for pulse_amp in parse_range_str(args.pulse_amp):
             fil_path = gen_filterbank(DM=DM, pulse_amp_counts=pulse_amp,with_noise=args.with_noise)
 
-            with open(fil_path.with_suffix(".fil_cfg"), 'w') as cfg_file:
-                make_config("FILTERBANK", fil_path.absolute(), fil_path.with_suffix(".fil_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)
+            if args.write_configs:
+                with open(fil_path.with_suffix(".fil_cfg"), 'w') as cfg_file:
+                    make_config("FILTERBANK", fil_path.absolute(), fil_path.with_suffix(".fil_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)
 
-            with open(fil_path.with_suffix(".dada_cfg"), 'w') as cfg_file:
-                make_config("DADA", "dada", fil_path.with_suffix(".dada_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)
+                with open(fil_path.with_suffix(".dada_cfg"), 'w') as cfg_file:
+                    make_config("DADA", "dada", fil_path.with_suffix(".dada_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)
                 
 
