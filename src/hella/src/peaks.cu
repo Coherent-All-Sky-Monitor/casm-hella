@@ -52,8 +52,10 @@ void hella::find_peaks(hella::pinfo_t *p, int bm)
       // TODO(ldunn) I don't really understand how these standard deviation checks are supposed to function. I have reversed the order of these first two checks, so that
       // if myStd is below STD_DEV_VERY_LOW_THRESHOLD we set myStd to a high value and skip over doing the peak-finding. But anything else
       // that's between VERY_LOW_THRESHOLD and LOW_THRESHOLD will have myStd set to 1, which seems wrong!
-      if (myStd<STD_DEV_VERY_LOW_THRESHOLD) myStd = 2.;
-      if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
+
+      // Further TODO(ldunn): I have just disabled these checks entirely for now.
+      //if (myStd<STD_DEV_VERY_LOW_THRESHOLD) myStd = 2.;
+      //if (myStd<STD_DEV_LOW_THRESHOLD) myStd = 1.;
     }
     if ((myStd<STD_DEV_HIGH_THRESHOLD && myStd>STD_DEV_VERY_HIGH_THRESHOLD) || DEBUG_ALWAYS_FIND_PEAKS) {
 
@@ -88,7 +90,7 @@ void hella::find_peaks(hella::pinfo_t *p, int bm)
       p->npeaks += n_found;
     }
     else {
-      spdlog::debug("hella::find_peaks Skipping beam {}, std dev={}", bm, myStd);
+      spdlog::warn("hella::find_peaks Skipping beam {}, std dev={}", bm, myStd);
     }
   }
 
