@@ -65,23 +65,23 @@ const int MAXRECV = 500;
 // Statistical parameters for boxcar smoothing (ldunn) I guess these have to be manually recomputed sometimes - they were somewhat wrong for the current configuration. Not sure what they actually depend on!
 // The current values were calcaluated by computing the means and standard deviations of the smoothed streams without the rescaling of smooth.cpp:89-110 applied. I don't remember what input data was used,
 // and these values should absolutely be revisited.
-//#define BOXCAR_MEAN 0.21368
-#define BOXCAR_MEAN 0.21358512
+#define BOXCAR_MEAN 0.21368
+//#define BOXCAR_MEAN 0.21358512
 // Individual standard deviation values for boxcar smoothing
 //#define BOXCAR_STD_0 0.001309
-#define BOXCAR_STD_0 0.0008018229
+#define BOXCAR_STD_0 0.0009489219
 //#define BOXCAR_STD_1 0.00124735
-#define BOXCAR_STD_1 0.00078224146
+#define BOXCAR_STD_1 0.0009342907
 //#define BOXCAR_STD_2 0.00103835
-#define BOXCAR_STD_2 0.00071913656
+#define BOXCAR_STD_2 0.0008887758
 //#define BOXCAR_STD_3 0.00081225
-#define BOXCAR_STD_3 0.0006578484
+#define BOXCAR_STD_3 0.000844923
 //#define BOXCAR_STD_4 0.00062605
-#define BOXCAR_STD_4 0.0006130994
+#define BOXCAR_STD_4 0.00081170804
 //#define BOXCAR_STD_5 0.00047785
-#define BOXCAR_STD_5 0.00058116735
+#define BOXCAR_STD_5 0.00078669307
 //#define BOXCAR_STD_6 0.00036005
-#define BOXCAR_STD_6 0.0005584275
+#define BOXCAR_STD_6 0.00076320046
 
 // Threshold parameters 
 // TODO(ldunn) not obvious what these should be - the current values should be regarded as provisional
@@ -90,8 +90,8 @@ const int MAXRECV = 500;
 #define TIME_SERIES_LOW_THRESHOLD 0.95
 #define STD_DEV_LOW_THRESHOLD 1.2
 #define STD_DEV_VERY_LOW_THRESHOLD 0.1
-#define STD_DEV_HIGH_THRESHOLD 1.5
-#define STD_DEV_VERY_HIGH_THRESHOLD 0.92
+#define STD_DEV_HIGH_THRESHOLD 5
+#define STD_DEV_VERY_HIGH_THRESHOLD 0.1
 
 namespace hella {
 // define a SCRUNCH structure
