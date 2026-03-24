@@ -87,7 +87,7 @@ def get_header(outfile: Path):
         "nbeams": 1,
     }
 
-def make_config(input_type, input_fname, output_fname, base_config_fname, output_file, injected_dm, injected_pulse_amp):
+def make_config(input_type, input_fname, output_fname, base_config_fname, output_file, nbeam, injected_dm, injected_pulse_amp):
 
     with open(base_config_fname, 'r') as f:
         for line in f.readlines():
@@ -96,6 +96,7 @@ def make_config(input_type, input_fname, output_fname, base_config_fname, output
     print(f"INPUT {input_type}", file=output_file)
     print(f"INPUT_PATH {input_fname}", file=output_file)
     print(f"OUTPUTPATH {output_fname}", file=output_file)
+    print(f"NBEAM {nbeam}", file=output_file)
     print(f"INJECTED_DM {injected_dm}", file=output_file)
     print(f"INJECTED_PULSE_AMP {injected_pulse_amp}", file=output_file)
     output_file.flush()
@@ -199,6 +200,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser("make_noise_fil_with_frb")
     p.add_argument("--DM", type=str, help="Dispersion measure of the injected pulse. Can either by specified by a single value or a range of the form start:step:end", required=True)
     p.add_argument("--pulse_amp", type=str, help="Pulse amplitude. Can either by specified by a single value or a range of the form start:step:end", required=True)
+    p.add_argument("--dada_nbeam", type=int, help="NBEAM value in the output .dada_cfg file", required=True)
     p.add_argument("--output", type=str, help="Output base filename", required=True)
     p.add_argument("--base_config", type=str, help="Template hella configuration", required=False)
     p.add_argument("--no_noise", action='store_false', dest='with_noise', help="Do not include noise", required=False)
@@ -212,9 +214,9 @@ if __name__ == "__main__":
 
             if args.write_configs:
                 with open(fil_path.with_suffix(".fil_cfg"), 'w') as cfg_file:
-                    make_config("FILTERBANK", fil_path.absolute(), fil_path.with_suffix(".fil_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)
+                    make_config("FILTERBANK", fil_path.absolute(), fil_path.with_suffix(".fil_candidates").absolute(), args.base_config, cfg_file, 1, DM, pulse_amp)
 
                 with open(fil_path.with_suffix(".dada_cfg"), 'w') as cfg_file:
-                    make_config("DADA", "dada", fil_path.with_suffix(".dada_candidates").absolute(), args.base_config, cfg_file, DM, pulse_amp)
+                    make_config("DADA", "dada", fil_path.with_suffix(".dada_candidates").absolute(), args.base_config, cfg_file, args.dada_nbeam, DM, pulse_amp)
                 
 

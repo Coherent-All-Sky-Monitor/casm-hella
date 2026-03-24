@@ -1,5 +1,7 @@
 from __future__ import annotations
 import numpy as np
+from pathlib import Path
+from make_noise_fil_with_frb import make_config
 
 def load_fil_data(input: str):
 
@@ -20,6 +22,8 @@ def get_dada_header(data_nbytes: int, gulp_nbytes: int, inj_beam: int, nbit: int
             f"INJ_BEAM {inj_beam}\n" + \
             f"NBIT {nbit}\n" + \
             "UTC_START 2020-01-01-00:00:00\n" + \
+            "PICOSECONDS 0\n" + \
+            "TSAMP 1000\n" + \
             "OBS_OFFSET 0\n"
     hdr += "\0" * (hdr_size - len(hdr))
 
@@ -80,4 +84,3 @@ if __name__ == "__main__":
     args = p.parse_args()
 
     convert_fil_to_dada(args.input, args.output, args.nchan, args.nbeam, args.ibeam, args.hdr_injbeam, args.gulp_samps, args.transpose, args.fp16)
-

@@ -347,7 +347,7 @@ void hella::fast_flagger(hella::pinfo_t *p)
   float begin{}, end{};
 
   // setup
-  int nBatches = static_cast<int>(NBEAMS / NBATCH);
+  int nBatches = static_cast<int>(p->nbeam / NBATCH);
   spdlog::debug("hella::fast_flagger have nbatches {}", nBatches);
   std::vector<float> mn_bp;
   mn_bp.resize(nBatches, 0);

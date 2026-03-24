@@ -181,10 +181,6 @@ int hella::read_header(FILE *inputfile, filterbank_header_t *hdr)
   {
     throw std::runtime_error("hella::read_header: mismatch between config and file: hdr->nchans=" + std::to_string(hdr->nchans) + " NCHAN=" + std::to_string(NCHAN));
   }
-  if (hdr->nbeams != NBEAMS)
-  {
-    throw std::runtime_error("hella::read_header: mismatch between config and file: hdr->nbeams=" + std::to_string(hdr->nbeams) + " NBEAMS=" + std::to_string(NBEAMS));
-  }
   if (hdr->nbits != 8)
   {
     throw std::runtime_error("hella::read_header: mismatch between config and file: hdr->nbits=" + std::to_string(hdr->nbits) + " hdr->nbits=8");

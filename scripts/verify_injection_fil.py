@@ -19,7 +19,7 @@ def run_hella(hella_path, out, cfg_path):
 
     subprocess.run(f"{hella_path} -c {cfg_path}", shell=True, stdout=subprocess.DEVNULL)
 
-    results = np.atleast_2d(np.loadtxt(out))
+    results = np.atleast_2d(np.loadtxt(out, skiprows=1))
     if len(results) == 1:
         return None, None
     by_snr = results[results[:,0].argsort()]

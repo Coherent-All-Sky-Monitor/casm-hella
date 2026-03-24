@@ -55,6 +55,7 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
 
   // read input file line by line
   p->nscrunches = 0;
+  p->nbeam = 0;
   p->BEAM_OFFSET = 0;
   char * line = NULL;
   ssize_t read;
@@ -96,6 +97,9 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
     }
     if (strcmp(c1,"OUTPUTPATH")==0) {
       strcpy(p->out_path,c2);
+    }
+    if (strcmp(c1, "NBEAM") == 0) {
+      p->nbeam = atoi(c2);
     }
     if (strcmp(c1,"BEAM_OFFSET")==0) {
       p->BEAM_OFFSET = atoi(c2);
@@ -215,34 +219,34 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
     spdlog::debug("dedisp_get_max_delay(p->dedispersion_plan)={}", dedisp_get_max_delay(p->dedispersion_plan));
   }
 
-  spdlog::info("sizes NCHAN={} NBATCH={} p->NTIME={} p->gulp={} NBEAMS={} ndms={} ntime_dedisp={} ntime_dd={}",
-   NCHAN, NBATCH, p->NTIME, p->gulp, NBEAMS, p->ndms, p->ntime_dedisp, p->ntime_dd);
+  spdlog::info("sizes NCHAN={} NBATCH={} p->NTIME={} p->gulp={} p->nbeam={} ndms={} ntime_dedisp={} ntime_dd={}",
+   NCHAN, NBATCH, p->NTIME, p->gulp, p->nbeam, p->ndms, p->ntime_dedisp, p->ntime_dd);
 
   // allocate everything
   const size_t nrewind = static_cast<size_t>(p->NTIME) - p->gulp;
-  const size_t nrewind_chan_beams = nrewind * NCHAN * NBEAMS;
-  const size_t ntime_chan_beams = static_cast<size_t>(p->NTIME) * NCHAN * NBEAMS;
+  const size_t nrewind_chan_beams = nrewind * NCHAN * p->nbeam;
+  const size_t ntime_chan_beams = static_cast<size_t>(p->NTIME) * NCHAN * p->nbeam;
 
   hella::alloc_cpu<float>(&p->h_flagSpec, NCHAN * NBATCH);
   hella::alloc_gpu<float>(&p->d_flagSpec, NCHAN * NBATCH);
-  hella::alloc_cpu<unsigned char>(&p->rewinds, nrewind * NCHAN * NBEAMS);
-  memset(p->rewinds, 0, nrewind * NCHAN * NBEAMS);
+  hella::alloc_cpu<unsigned char>(&p->rewinds, nrewind * NCHAN * p->nbeam);
+  memset(p->rewinds, 0, nrewind * NCHAN * p->nbeam);
 
-  hella::alloc_cpu_host<unsigned char>(&p->data, p->NTIME * NBEAMS * NCHAN);
+  hella::alloc_cpu_host<unsigned char>(&p->data, p->NTIME * p->nbeam * NCHAN);
 
   hella::alloc_cpu<float>(&p->h_dataF, p->NTIME * NCHAN);
   hella::alloc_gpu<float>(&p->d_dedispPacked, p->ndms * p->ntime_dedisp);
   hella::alloc_gpu<unsigned char>(&p->d_inputPacked, p->NTIME * NCHAN);
-  hella::alloc_gpu<unsigned char>(&p->d_data, p->NTIME * NBEAMS * NCHAN);
+  hella::alloc_gpu<unsigned char>(&p->d_data, p->NTIME * p->nbeam * NCHAN);
   if (p->inp_format == 0) // DADA input, gulps are fp16 FT ordered
   {
     p->gulp_nbyte = sizeof(half);
-    hella::alloc_gpu<half>(reinterpret_cast<half **>(&p->d_gulp), p->gulp * NBEAMS * NCHAN);
+    hella::alloc_gpu<half>(reinterpret_cast<half **>(&p->d_gulp), p->gulp * p->nbeam * NCHAN);
   }
   else // Otherwise gulps are u8 TF ordered
   {
     p->gulp_nbyte = sizeof(unsigned char);
-    hella::alloc_gpu<unsigned char>(&p->d_gulp, p->gulp * NBEAMS * NCHAN); 
+    hella::alloc_gpu<unsigned char>(&p->d_gulp, p->gulp * p->nbeam * NCHAN); 
   }
 
   hella::alloc_gpu_pitch<half>(&p->batch, reinterpret_cast<size_t*>(&p->batch_stride), p->gulp, NBATCH * NCHAN);
@@ -552,11 +556,11 @@ int main(int argc, char *argv[]) try
 
     // read data
     fread(p.data,sizeof(char),p.NTIME*NCHAN,fin);
-    if (NBEAMS>1) {
-      for (int i=1;i<NBEAMS;i++)
+    if (p.nbeam>1) {
+      for (int i=1;i<p.nbeam;i++)
         memcpy(p.data+i*p.NTIME*NCHAN,p.data,p.NTIME*NCHAN);
     }
-    cudaMemcpy(p.d_data,p.data,NBEAMS*p.NTIME*NCHAN,cudaMemcpyHostToDevice);
+    cudaMemcpy(p.d_data,p.data,p.nbeam*p.NTIME*NCHAN,cudaMemcpyHostToDevice);
     fclose(fin);
 
     // flag it
@@ -595,7 +599,7 @@ int main(int argc, char *argv[]) try
   if (p.inp_format == 2)
   {
     spdlog::info("allocating sigproc_buf");
-    hella::alloc_cpu<unsigned char>(&sigproc_buf, p.gulp * NCHAN * NBEAMS * 2);
+    hella::alloc_cpu<unsigned char>(&sigproc_buf, p.gulp * NCHAN * p.nbeam * 2);
   }
 
   // DADA Header plus Data Unit
@@ -605,6 +609,7 @@ int main(int argc, char *argv[]) try
   {
     case 0: // dada input
       hdu_in = hella::hdu_connect_read(&p);
+      spdlog::info("{}",p.dada_header.data());
       spdlog::info("Got header UTC_START={} TSAMP={}", p.dada_header_parsed.at("UTC_START"), p.dada_header_parsed.at("TSAMP"));
       break;
 
@@ -638,7 +643,8 @@ int main(int argc, char *argv[]) try
   // set up output
   // FILE *fout{nullptr}, *fbeam{nullptr};
   FILE *fspec{nullptr};
-  int beamflags[NBEAMS], specflags[NCHAN];
+  std::vector<int> beamflags(p.nbeam);
+  int specflags[NCHAN];
   int bm{0};
 
   // loop over data gulps, figuring out at the end if we're finished
@@ -671,7 +677,7 @@ int main(int argc, char *argv[]) try
     }
 
     if (p.inp_format==2 && fin != NULL)
-      fread(sigproc_buf, sizeof(unsigned char), NBEAMS*p.gulp*NCHAN, fin);
+      fread(sigproc_buf, sizeof(unsigned char), p.nbeam*p.gulp*NCHAN, fin);
 
     // set up logging and reset output
     //for (int i=0;i<NBEAMS;i++) beamflags[i] = 0;
@@ -688,11 +694,11 @@ int main(int argc, char *argv[]) try
 
     if (p.inp_format==0) // DADA input - fp16
     {
-      checkCuda(cudaMemcpy(p.d_gulp, block, NBEAMS * beam_gulp_stride * sizeof(half), cudaMemcpyHostToDevice));
+      checkCuda(cudaMemcpy(p.d_gulp, block, p.nbeam * beam_gulp_stride * sizeof(half), cudaMemcpyHostToDevice));
     }
     else if (p.inp_format==2) // filterbank input - u8
     {
-      checkCuda(cudaMemcpy(p.d_gulp, sigproc_buf, NBEAMS * beam_gulp_stride, cudaMemcpyHostToDevice));
+      checkCuda(cudaMemcpy(p.d_gulp, sigproc_buf, p.nbeam * beam_gulp_stride, cudaMemcpyHostToDevice));
     }
     end = clock();
     readt += static_cast<float>(end - begin) / CLOCKS_PER_SEC;
@@ -721,7 +727,7 @@ int main(int argc, char *argv[]) try
       bm = 0;
       tot_time = readt+flagt;
 
-      while ((bm<NBEAMS) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS))
+      while ((bm<p.nbeam) && (tot_time<PROCESSING_TIME_LIMIT) && (p.out_npeaks < MAX_GIANTS))
       {
         begin = clock();
         hella::dedisperse(&p,bm);
@@ -742,9 +748,9 @@ int main(int argc, char *argv[]) try
         bm += 1;
       }
 
-      if (bm < NBEAMS)
+      if (bm < p.nbeam)
       {
-        spdlog::warn("Only processed {}/{} beams - detected {} peaks", bm, NBEAMS, p.out_npeaks);
+        spdlog::warn("Only processed {}/{} beams - detected {} peaks", bm, p.nbeam, p.out_npeaks);
       }
 
       begin = clock();
@@ -778,7 +784,7 @@ int main(int argc, char *argv[]) try
       last_dat -= p.gulp;
     spdlog::debug("First rewind chunk will fill up to last_dat={}", last_dat);
 
-    for (int ibeam = 0; ibeam < NBEAMS; ibeam++)
+    for (int ibeam = 0; ibeam < p.nbeam; ibeam++)
     {
       unsigned char *beam_data = p.d_data + ibeam * p.NTIME * NCHAN;
 

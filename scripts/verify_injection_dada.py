@@ -17,17 +17,18 @@ def fill_db_from_disk(input, key):
 
 DM_TOL = 2
 
-def verify_inj(hella_path, cfg, nchan, nbeam, transpose, fp16):
+def verify_inj(hella_path, cfg, nchan, transpose, fp16):
     cfg = pathlib.Path(cfg)
     cfg_dict = parse_cfg(cfg)
     dada_key = cfg_dict["INPUT_PATH"]
     gulp = int(cfg_dict["GULP"])
+    nbeam = int(cfg_dict["NBEAM"])
     
     dada_file = tempfile.NamedTemporaryFile(delete=False)
 
     fil = cfg.with_suffix(".fil").absolute()
     print(fil)
-    ndat = convert_fil_to_dada(fil, dada_file.name, nchan, nbeam, nbeam//2, gulp, transpose, fp16)
+    ndat = convert_fil_to_dada(fil, dada_file.name, nchan, nbeam, nbeam//2, nbeam//2, gulp, transpose, fp16)
 
     db_size = nbeam * nchan * gulp * (2 if fp16 else 1)
     make_db(dada_key, db_size, ndat // gulp)
@@ -37,7 +38,6 @@ def verify_inj(hella_path, cfg, nchan, nbeam, transpose, fp16):
     destroy_db("dada")
     if snr is None or recovered_dm is None:
         return False
-    
 
     inj_dm = float(cfg_dict["INJECTED_DM"])
     print(f"Max SNR: {snr} Max DM: {recovered_dm} Expected DM: {inj_dm}")
@@ -50,7 +50,6 @@ if __name__ == "__main__":
     p.add_argument("--cfg_glob", type=str, help="Glob matching input configurations for hella")
     p.add_argument("--hella", type=str, default="casm_hella", help="Path to hella binary (in case it's not in $PATH)")
     p.add_argument("--nchan", type=int, default=3072, help="Number of channels per beam")
-    p.add_argument("--nbeam", type=int, default=8, help="Number of beams to produce")
     p.add_argument("--transpose", type=bool, default=True, help="Transpose the freq-time dimensions when converting from filterbank to DADA (i.e. TF -> FT)")
     p.add_argument("--fp16", type=bool, default=True, help="Save data as fp16 (otherwise uint8)")
     args = p.parse_args()
@@ -61,7 +60,7 @@ if __name__ == "__main__":
 
         print(f"Doing {cfg}")
 
-        verified = verify_inj(args.hella, cfg, args.nchan, args.nbeam, args.transpose, args.fp16)
+        verified = verify_inj(args.hella, cfg, args.nchan, args.transpose, args.fp16)
 
         if verified:
             print(f"[OK] {cfg}")

@@ -42,7 +42,6 @@ const int MAXRECV = 500;
 // If the variances of individual beams in a batch differ significantly, the normalisation will not be correct, and the distribution of values in the post-flagging beams can be heavily distorted
 #define NBATCH 1
 #define NCHAN 3072
-#define NBEAMS 64
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
@@ -122,6 +121,7 @@ typedef struct pinfo {
   int coincidencer_port;
   std::string coincidencer_host;
   char out_path[500]; // path or IP
+  int nbeam;
   int BEAM_OFFSET;
   int BEAM0;
   int flag1, flag2; // flag ranges
