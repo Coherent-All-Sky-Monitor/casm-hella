@@ -209,7 +209,16 @@ void hella::output_peaks(hella::pinfo_t *p, int samp, int restart_socket)
       sstat=1;
 
     if (sstat && (m_sock != -1)) {
-      oss << (int)(samp/p->gulp)+1 << std::endl;
+      oss << (int)(samp/p->gulp)+1;
+      // if dada input, we expect to have UTC_START, PICOSECONDS and TSAMP from the header, so send them to the coincidencer so it can convert from sample
+      // index to absolute time
+      if (p->inp_format == 0) 
+      {
+        oss << " " << p->dada_header_parsed.at("UTC_START");
+        oss << " " << p->dada_header_parsed.at("PICOSECONDS");
+        oss << " " << p->dada_header_parsed.at("TSAMP");
+      }
+      oss << std::endl;
 
       // record output
       for( int i=0; i<p->out_npeaks; i++ ) {

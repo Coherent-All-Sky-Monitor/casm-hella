@@ -605,6 +605,7 @@ int main(int argc, char *argv[]) try
   {
     case 0: // dada input
       hdu_in = hella::hdu_connect_read(&p);
+      spdlog::info("Got header UTC_START={} TSAMP={}", p.dada_header_parsed.at("UTC_START"), p.dada_header_parsed.at("TSAMP"));
       break;
 
     case 1: // text file input

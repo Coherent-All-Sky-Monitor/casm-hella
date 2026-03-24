@@ -15,6 +15,7 @@
 #include <nppi.h>
 #include <npps.h>
 #include <string>
+#include <map>
 #include <thrust/gather.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
@@ -109,6 +110,8 @@ typedef struct pinfo {
   int inp_format; // 0 for dada, 1 for file, 2 for filterbank
   char inp_path[500];
   char dada_out[100];
+  std::vector<char> dada_header; // If reading from dada, storage for the raw header
+  std::map<std::string, std::string> dada_header_parsed{}; // If reading from dada, the parsed key-value pairs 
   float minDM, maxDM, snr;
   int minWidth, maxWidth;
   unsigned long gulp;
