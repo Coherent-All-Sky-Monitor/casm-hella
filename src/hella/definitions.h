@@ -45,7 +45,6 @@ const int MAXRECV = 500;
 #define NCHAN_BOX 48
 #define NTIME_BOX 500
 #define MAX_DM 2000
-#define TOL 1.3
 #define MAX_BOX 15
 #define MAX_GIANTS 10000
 #define DADA_BLOCK_KEY 0x0000dada // for capture program.
@@ -133,6 +132,7 @@ typedef struct pinfo {
   unsigned long rewind; // samples to rewind by
   unsigned long nchan; // number of resampled channels
   int ndms; // number of DM trials
+  float dm_tol; // DM tolerance to be passed to dedisp_generate_dm_list
   int ntime_dd; // dedisp number of times
   int ntime_out; // final output number of times
   int ntime_dedisp; // number of dedispersed times (must be >= NTIME-max_delay)

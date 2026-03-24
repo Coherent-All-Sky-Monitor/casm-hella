@@ -65,6 +65,7 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   p->flag2 = -1;
   p->spec_min = -0.05;
   p->spec_max = 0.15;
+  p->dm_tol = 1.3;
   p->output_bandpass = 0;
   int gpu_id = 0;
 
@@ -126,6 +127,9 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
       p->minDM=atof(c2);
     if (strcmp(c1,"DM_MAX")==0)
       p->maxDM=atof(c2);
+    if (strcmp(c1, "DM_TOL")==0) {
+      p->dm_tol = atof(c2);
+    }
     if (strcmp(c1,"WIDTH_MIN")==0) {
       p->minWidth=atoi(c2);
     }
@@ -200,7 +204,7 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   spdlog::info("Creating a dedispersion plan nchans={} dt={} f0={} df={}\n", NCHAN, TIME_RESOLUTION, CHAN0_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   dedisp_create_plan(&p->dedispersion_plan,NCHAN,TIME_RESOLUTION,CHAN0_FREQ/1e6,FREQ_CHANNEL_WIDTH);
   // generate DM list
-  dedisp_generate_dm_list(p->dedispersion_plan,p->minDM,p->maxDM,40,TOL);
+  dedisp_generate_dm_list(p->dedispersion_plan,p->minDM,p->maxDM,40,p->dm_tol);
   p->DMs = dedisp_get_dm_list(p->dedispersion_plan);
   p->ndms = dedisp_get_dm_count(p->dedispersion_plan);
   p->ntime_dd = p->NTIME - dedisp_get_max_delay(p->dedispersion_plan);
