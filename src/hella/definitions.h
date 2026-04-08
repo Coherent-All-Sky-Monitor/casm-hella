@@ -145,8 +145,6 @@ typedef struct pinfo {
   int boxes_step;
   Npp32f * imbox{nullptr};
   int imbox_step;
-  float * stds{nullptr};
-  float mean;
 
   // peak finding
   thrust::device_vector<float> dmt;
