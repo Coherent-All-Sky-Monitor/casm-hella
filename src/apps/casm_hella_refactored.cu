@@ -273,16 +273,6 @@ void initialize(FILE *fconf, hella::pinfo_t* p) {
   // boxcars
   p->boxes = nppiMalloc_32f_C1(p->ntime_out,(p->ndms-2)*p->nboxcar,&(p->boxes_step));
   p->imbox = nppiMalloc_32f_C1(p->ntime_dd,p->ndms,&(p->imbox_step));
-  hella::alloc_cpu<float>(&p->stds, p->nboxcar);
-  p->mean = BOXCAR_MEAN;
-  p->stds[0] = BOXCAR_STD_0;
-  p->stds[1] = BOXCAR_STD_1;
-  p->stds[2] = BOXCAR_STD_2;
-  p->stds[3] = BOXCAR_STD_3;
-  p->stds[4] = BOXCAR_STD_4;
-  p->stds[5] = BOXCAR_STD_5;
-  p->stds[6] = BOXCAR_STD_6;
-
   // peak finding
   p->dmt.resize((p->ndms-2)*p->ntime_out);
   p->output_indices.resize((p->ndms-2)*p->ntime_out);
@@ -342,7 +332,6 @@ void deallocator(hella::pinfo_t * p)
   hella::release_cpu(&p->dm_idx);
   hella::release_cpu(&p->samp);
   hella::release_cpu(&p->peaks);
-  hella::release_cpu(&p->stds);
   hella::release_cpu(&p->rewinds);
 }
 

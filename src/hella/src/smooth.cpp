@@ -8,6 +8,7 @@
 
 #include "hella/alloc.h"
 #include "hella/smooth.h"
+#include <spdlog/spdlog.h>
 #include "hella/normalization.h"
 #include "hella/macros.h"
 
@@ -101,7 +102,12 @@ void hella::smooth(hella::pinfo_t *p, int scale)
       float measured_mean{};
       float measured_std = hella::calculate_stddev(p, data, p->ntime_out, height, stride, &measured_mean);
 
-      if (measured_std > 0) {
+      if (measured_std <= 0) {
+        spdlog::warn("hella::smooth: boxcar width {} has non-positive std dev ({}) -- skipping normalization", smit, measured_std);
+      } else {
+        if (measured_std > 5.0f) {
+          spdlog::warn("hella::smooth: boxcar width {} has unusually large std dev ({})", smit, measured_std);
+        }
         checkNpp(nppiAddC_32f_C1IR(
           (const Npp32f)(-1.0f * measured_mean),
           data,
