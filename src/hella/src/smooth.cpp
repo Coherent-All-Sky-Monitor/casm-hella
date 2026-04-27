@@ -8,6 +8,8 @@
 
 #include "hella/alloc.h"
 #include "hella/smooth.h"
+#include <spdlog/spdlog.h>
+#include "hella/normalization.h"
 #include "hella/macros.h"
 
 #include <npp.h>
@@ -44,7 +46,7 @@ void hella::smooth(hella::pinfo_t *p, int scale)
     filtSum = 0.;
     for (int i=0;i<3;i++) {
       for (int j=0;j<2*sm+1;j++) {
-        v = 1.-0.5*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))+0.25*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))*0.25*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))-0.083*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))*0.083*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355))*0.083*((j-sm*2.)/(sm/2.355))*((j-sm*2.)/(sm/2.355));
+        v = 1.-0.5*((j-sm)/(sm/2.355))*((j-sm)/(sm/2.355))+0.25*((j-sm)/(sm/2.355))*((j-sm)/(sm/2.355))*0.25*((j-sm)/(sm/2.355))*((j-sm)/(sm/2.355))-0.083*((j-sm)/(sm/2.355))*((j-sm)/(sm/2.355))*0.083*((j-sm)/(sm/2.355))*((j-sm)/(sm/2.355))*0.083*((j-sm)/(sm/2.355))*((j-sm)/(sm/2.355));
         h_kernel[i*(2*sm+1)+j] = w[i]*v*v;
         filtSum += w[i]*v*v;
       }
@@ -84,31 +86,42 @@ void hella::smooth(hella::pinfo_t *p, int scale)
     smit++;
   }
 
-  // zero mean, std 1
-  const Npp32f npm = -1.*p->mean;
+  // Unlock scratch before normalization (calculate_stddev needs it)
+  hella::unlock_d_scratch(p);
+  hella::unlock_h_scratch(p);
+
+  // Normalize each width trial to zero mean, unit variance.
+  // Compute mean and std from the data.
   if (scale==1)
   {
     for (smit=0;smit<p->nboxcar;smit++)
     {
-      checkNpp(nppiAddC_32f_C1IR(
-        npm,
-        p->boxes+smit*(p->ndms-2)*p->boxes_step/sizeof(float),
-        p->boxes_step,
-        oOutROI
-      ));
-      checkNpp(nppiMulC_32f_C1IR(
-        (const Npp32f)(1./p->stds[smit]),
-        p->boxes+smit*(p->ndms-2)*p->boxes_step/sizeof(float),
-        p->boxes_step,
-        oOutROI
-      ));
+      const int height = p->ndms - 2;
+      const int stride = p->boxes_step / sizeof(float);
+      float* data = p->boxes + smit * height * stride;
+      float measured_mean{};
+      float measured_std = hella::calculate_stddev(p, data, p->ntime_out, height, stride, &measured_mean);
 
-      // flag first DM trial
-      //cudaMemcpy(p->boxes+smit*p->ndms*p->boxes_step/sizeof(float),zeros,p->ntime_dd*sizeof(float),cudaMemcpyDeviceToDevice);
-      //cudaMemcpy(p->boxes+smit*p->ndms*p->boxes_step/sizeof(float)+(p->ndms-1)*p->ntime_dd,zeros,p->ntime_dd*sizeof(float),cudaMemcpyDeviceToDevice);
+      if (measured_std <= 0) {
+        spdlog::warn("hella::smooth: boxcar width {} has non-positive std dev ({}) -- skipping normalization", smit, measured_std);
+      } else {
+        if (measured_std > 5.0f) {
+          spdlog::warn("hella::smooth: boxcar width {} has unusually large std dev ({})", smit, measured_std);
+        }
+        checkNpp(nppiAddC_32f_C1IR(
+          (const Npp32f)(-1.0f * measured_mean),
+          data,
+          p->boxes_step,
+          oOutROI
+        ));
+        checkNpp(nppiMulC_32f_C1IR(
+          (const Npp32f)(1.0f / measured_std),
+          data,
+          p->boxes_step,
+          oOutROI
+        ));
+      }
     }
   }
 
-  hella::unlock_d_scratch(p);
-  hella::unlock_h_scratch(p);
 }

@@ -61,28 +61,7 @@ const int MAXRECV = 500;
 #define PROCESSING_TIME_LIMIT 100.1   // time limit for processing in seconds, causes dedispersion to be skipped
 #define FLAG_NORMALIZATION_FACTOR 805306368.0  // normalization factor for flagging statistics
 
-// Statistical parameters for boxcar smoothing (ldunn) I guess these have to be manually recomputed sometimes - they were somewhat wrong for the current configuration. Not sure what they actually depend on!
-// The current values were calcaluated by computing the means and standard deviations of the smoothed streams without the rescaling of smooth.cpp:89-110 applied. I don't remember what input data was used,
-// and these values should absolutely be revisited.
-#define BOXCAR_MEAN 0.21368
-//#define BOXCAR_MEAN 0.21358512
-// Individual standard deviation values for boxcar smoothing
-//#define BOXCAR_STD_0 0.001309
-#define BOXCAR_STD_0 0.0009489219
-//#define BOXCAR_STD_1 0.00124735
-#define BOXCAR_STD_1 0.0009342907
-//#define BOXCAR_STD_2 0.00103835
-#define BOXCAR_STD_2 0.0008887758
-//#define BOXCAR_STD_3 0.00081225
-#define BOXCAR_STD_3 0.000844923
-//#define BOXCAR_STD_4 0.00062605
-#define BOXCAR_STD_4 0.00081170804
-//#define BOXCAR_STD_5 0.00047785
-#define BOXCAR_STD_5 0.00078669307
-//#define BOXCAR_STD_6 0.00036005
-#define BOXCAR_STD_6 0.00076320046
-
-// Threshold parameters 
+// Threshold parameters
 // TODO(ldunn) not obvious what these should be - the current values should be regarded as provisional
 #define DEBUG_ALWAYS_FIND_PEAKS 0 // Ignore the std. dev thresholds in the peak finding code. Intended for profiling with fake data
 #define TIME_SERIES_HIGH_THRESHOLD 1.05
@@ -166,8 +145,6 @@ typedef struct pinfo {
   int boxes_step;
   Npp32f * imbox{nullptr};
   int imbox_step;
-  float * stds{nullptr};
-  float mean;
 
   // peak finding
   thrust::device_vector<float> dmt;
